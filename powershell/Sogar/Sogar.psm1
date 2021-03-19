@@ -285,6 +285,35 @@ function Get-SogarMimeType
     $MimeType
 }
 
+function Invoke-SogarWebRequest
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [Hashtable] $RequestParams
+    )
+
+    if ($RequestParams['Method'] -eq 'HEAD') {
+        if ($PSEdition -eq 'Core') {
+            $RequestParams['SkipHttpErrorCheck'] = $true
+        }
+    }
+
+    $OldProgressReference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
+    $Response = try {
+        Invoke-WebRequest @RequestParams -ErrorAction Stop
+    } catch [System.Net.WebException] { 
+        Write-Verbose "An exception was caught: $($_.Exception.Message)"
+        $_.Exception.Response
+    }
+
+    $ProgressReference = $OldProgressPreference
+
+    $Response
+}
+
 function Get-SogarAccessToken
 {
     [CmdletBinding()]
@@ -379,18 +408,19 @@ function Get-SogarManifest
         "application/vnd.oci.image.index.v1+json",
         "*/*")
     
-    $HeaderParams = @{
+    $Headers = @{
         Accept = $($AcceptList -Join ",");
         Authorization = "Bearer $AccessToken";
     }
     
     $RequestParams = @{
         Method = 'GET';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/manifests/$ImageTag";
     }
     
-    $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
+    $Response = Invoke-WebRequest @RequestParams
 
     if ($Cache) {
         $ManifestFile = Join-Path $Cache.ManifestPath "$Repository/$ImageName/$ImageTag"
@@ -442,7 +472,7 @@ function Save-SogarBlob
 
     $AcceptList = @($MediaType, "*/*")
     
-    $HeaderParams = @{
+    $Headers = @{
         Accept = $($AcceptList -Join ",");
         Authorization = "Bearer $AccessToken";
     }
@@ -454,16 +484,14 @@ function Save-SogarBlob
 
     $RequestParams = @{
         Method = 'GET';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/blobs/$Digest";
         OutFile = $OutputBlobFile
         Passthru = $true;
     }
 
-    $OldProgressReference = $ProgressPreference
-    $ProgressPreference = "SilentlyContinue"
-    $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
-    $ProgressReference = $OldProgressPreference
+    $Response = Invoke-SogarWebRequest $RequestParams
 
     $OutputBlobFile
 }
@@ -547,49 +575,52 @@ function Export-SogarBlob
 
     # HEAD request
 
-    $HeaderParams = @{
+    $Headers = @{
         Authorization = "Bearer $AccessToken";
         Accept = $($AcceptTypes -Join ",");
     }
 
     $RequestParams = @{
         Method = 'HEAD';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/blobs/$Digest";
     }
 
-    try {
-        $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
-    } catch {
+    $Response = Invoke-SogarWebRequest $RequestParams
 
+    if ($Response.StatusCode -eq 200) {
+        return;
     }
 
     # POST request
 
-    $HeaderParams = @{
+    $Headers = @{
         "Authorization" = "Bearer $AccessToken";
         "Content-Length" = "0";
     }
 
     $RequestParams = @{
         Method = 'POST';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/blobs/uploads/";
         ContentType = "application/octet-stream"
     }
 
-    $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
+    $Response = Invoke-WebRequest @RequestParams
     
     $PushLocation = $Response.Headers['Location']
 
     # PUT request
 
-    $HeaderParams = @{
+    $Headers = @{
         Authorization = "Bearer $AccessToken";
     }
 
     $RequestParams = @{
         Method = 'PUT';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl$PushLocation&digest=$Digest";
         ContentType = "application/octet-stream"
@@ -597,7 +628,7 @@ function Export-SogarBlob
         TimeoutSec = "36000"
     }
 
-    $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
+    $Response = Invoke-WebRequest @RequestParams
 }
 
 function Export-SogarManifest
@@ -628,6 +659,8 @@ function Export-SogarManifest
         $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
     }
 
+    # https://github.com/opencontainers/image-spec/blob/master/manifest.md
+
     if (-Not $MediaType) {
         $MediaType = "application/vnd.oci.image.manifest.v1+json"
     }
@@ -645,38 +678,37 @@ function Export-SogarManifest
 
     # HEAD request
 
-    $HeaderParams = @{
+    $Headers = @{
         Authorization = "Bearer $AccessToken";
         Accept = $($AcceptTypes -Join ",");
     }
 
     $RequestParams = @{
         Method = 'HEAD';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/manifests/$ImageTag";
+        SkipHttpErrorCheck = $true;
     }
 
-    try {
-        $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams -ErrorAction SilentlyContinue
-    } catch {
-
-    }
+    $Response = Invoke-SogarWebRequest $RequestParams
 
     # PUT request
 
-    $HeaderParams = @{
+    $Headers = @{
         Authorization = "Bearer $AccessToken";
     }
 
     $RequestParams = @{
         Method = 'PUT';
+        Headers = $Headers;
         UseBasicParsing = $true;
         Uri = "$RegistryUrl/v2/$Repository/$ImageName/manifests/$ImageTag";
         ContentType = $MediaType;
         InFile = $InputFile
     }
 
-    $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
+    $Response = Invoke-WebRequest @RequestParams
 }
 
 function Export-SogarFileArtifact
@@ -700,16 +732,23 @@ function Export-SogarFileArtifact
         $MediaType = Get-SogarMimeType $InputFile
     }
 
-    $ArtifactFileHash = Get-FileHash $InputFile -Algorithm 'SHA256'
+    $ArtifactFileName = $(Get-Item $InputFile).Name
     $ArtifactFileSize = $(Get-Item $InputFile).Length
+
+    $ArtifactFileHash = Get-FileHash $InputFile -Algorithm 'SHA256'
     $ArtifactDigestType = $ArtifactFileHash.Algorithm.ToLower()
     $ArtifactDigestValue = $ArtifactFileHash.Hash.ToLower()
     $ArtifactDigest = "$ArtifactDigestType`:$ArtifactDigestValue"
+
+    $Annotations = [PSCustomObject]@{
+        "org.opencontainers.image.title" = $ArtifactFileName
+    }
 
     $Layer = [PSCustomObject]@{
         mediaType = $MediaType
         digest = $ArtifactDigest
         size = $ArtifactFileSize
+        annotations = $Annotations
     }
 
     $Layers = @($Layer)
@@ -725,8 +764,10 @@ function Export-SogarFileArtifact
     $ConfigDigestValue = $ConfigFileHash.Hash.ToLower()
     $ConfigDigest = "$ConfigDigestType`:$ConfigDigestValue"
 
+    # https://github.com/opencontainers/image-spec/blob/master/config.md
+
     $Config = [PSCustomObject]@{
-        mediaType = "application/json"
+        mediaType = "application/vnd.oci.image.config.v1+json"
         digest = $ConfigDigest
         size = $ConfigFileSize
     }
@@ -739,7 +780,7 @@ function Export-SogarFileArtifact
         layers = $Layers
     }
 
-    $ManifestData = $Manifest | ConvertTo-Json
+    $ManifestData = $Manifest | ConvertTo-Json -Depth 6 -Compress
     $ManifestBytes = $([System.Text.Encoding]::UTF8).GetBytes($ManifestData)
     $TempManifest = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
 
@@ -843,7 +884,7 @@ function Export-SogarArchiveArtifact
     $ConfigDigest = "$ConfigDigestType`:$ConfigDigestValue"
 
     $Config = [PSCustomObject]@{
-        mediaType = "application/json"
+        mediaType = "application/vnd.oci.image.config.v1+json"
         digest = $ConfigDigest
         size = $ConfigFileSize
     }
@@ -856,7 +897,7 @@ function Export-SogarArchiveArtifact
         layers = $Layers
     }
 
-    $ManifestData = $Manifest | ConvertTo-Json
+    $ManifestData = $Manifest | ConvertTo-Json -Depth 6 -Compress
     $ManifestBytes = $([System.Text.Encoding]::UTF8).GetBytes($ManifestData)
     $TempManifest = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
 

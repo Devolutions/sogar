@@ -720,6 +720,7 @@ function Export-SogarFileArtifact
         [Parameter(Mandatory=$true,Position=1)]
         [string] $InputFile,
         [string] $MediaType,
+        [string] $MediaFileName,
         [string] $AccessToken,
         [SogarRegistry] $Registry
     )
@@ -732,7 +733,14 @@ function Export-SogarFileArtifact
         $MediaType = Get-SogarMimeType $InputFile
     }
 
-    $ArtifactFileName = $(Get-Item $InputFile).Name
+    if (-Not (Test-Path -Path $InputFile -PathType 'Leaf')) {
+        throw "`"$InputFile`" is not a directory"
+    }
+
+    if (-Not $MediaFileName) {
+        $MediaFileName = $(Get-Item $InputFile).Name
+    }
+
     $ArtifactFileSize = $(Get-Item $InputFile).Length
 
     $ArtifactFileHash = Get-FileHash $InputFile -Algorithm 'SHA256'
@@ -741,7 +749,7 @@ function Export-SogarFileArtifact
     $ArtifactDigest = "$ArtifactDigestType`:$ArtifactDigestValue"
 
     $Annotations = [PSCustomObject]@{
-        "org.opencontainers.image.title" = $ArtifactFileName
+        "org.opencontainers.image.title" = $MediaFileName
     }
 
     $Layer = [PSCustomObject]@{
@@ -841,6 +849,7 @@ function Export-SogarArchiveArtifact
         [Parameter(Mandatory=$true,Position=1)]
         [string] $Path,
         [string] $MediaType,
+        [string] $MediaFileName,
         [string] $AccessToken,
         [SogarRegistry] $Registry
     )
@@ -853,10 +862,20 @@ function Export-SogarArchiveArtifact
         $MediaType = "application/zip"
     }
 
+    $Path = Resolve-Path $Path
+
+    if (-Not (Test-Path -Path $Path -PathType 'Container')) {
+        throw "`"$Path`" is not a directory"
+    }
+
+    if (-Not $MediaFileName) {
+        $MediaFileName = $(Get-Item $Path).Name
+    }
+
     # compress layers
 
     $TempArchive = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.zip')
-    Compress-Archive -Path $Path -Destination $TempArchive
+    Compress-Archive -Path "$Path\*" -Destination $TempArchive
 
     $ArchiveFileHash = Get-FileHash $TempArchive -Algorithm 'SHA256'
     $ArchiveFileSize = $(Get-Item $TempArchive).Length
@@ -864,10 +883,15 @@ function Export-SogarArchiveArtifact
     $ArchiveDigestValue = $ArchiveFileHash.Hash.ToLower()
     $ArchiveDigest = "$ArchiveDigestType`:$ArchiveDigestValue"
 
+    $Annotations = [PSCustomObject]@{
+        "org.opencontainers.image.title" = $MediaFileName
+    }
+
     $Layer = [PSCustomObject]@{
         mediaType = $MediaType
         digest = $ArchiveDigest
         size = $ArchiveFileSize
+        annotations = $Annotations
     }
 
     $Layers = @($Layer)

@@ -8,7 +8,7 @@ Open a new PowerShell terminal, and import the Sogar PowerShell module:
 Import-Module ".\powershell\Sogar\Sogar.psm1"
 ```
 
-Start by defining environment variables to point to the your ACR URL, username and password. You also need to specify a cache directory for the registry files.
+Start by defining environment variables to point to the your ACR URL, username and password.
 
 ```powershell
 $Env:SOGAR_REGISTRY_URL="https://myrepo.azurecr.io"
@@ -33,7 +33,7 @@ Import-SogarFileArtifact "videos/demo:latest" ".\VideoDemo2.mp4"
 Compare the video files to confirm that they are the same:
 
 ```powershell
-PS C:\wayk\dev\oci-packages\packages> Get-FileHash ".\VideoDemo*.mp4"
+PS > Get-FileHash ".\VideoDemo*.mp4"
 
 Algorithm       Hash                                                                   Path
 ---------       ----                                                                   ----

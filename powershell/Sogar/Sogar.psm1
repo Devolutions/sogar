@@ -3,44 +3,40 @@
 
 class SogarCache
 {
-    [string] $CachePath
+    [string] $Path
     [string] $BlobPath
     [string] $ManifestPath
-    [string] $TempPath
 }
 
 function New-SogarCache
 {
     [CmdletBinding()]
     param(
-        [string] $CachePath
+        [string] $Path
     )
 
     $Cache = [SogarCache]::new()
 
     $HomePath = Resolve-Path "~"
 
-    if ([string]::IsNullOrEmpty($CachePath)) {
+    if ([string]::IsNullOrEmpty($Path)) {
         if ($Env:SOGAR_REGISTRY_CACHE) {
-            $CachePath = $Env:SOGAR_REGISTRY_CACHE
+            $Path = $Env:SOGAR_REGISTRY_CACHE
         } else {
-            $CachePath = Join-Path $HomePath ".sogar"
+            $Path = Join-Path $HomePath ".sogar"
         }
     }
 
-    $BlobPath = Join-Path $CachePath "blobs"
-    $ManifestPath = Join-Path $CachePath "manifests"
-    $TempPath = Join-Path $CachePath "temp"
+    $BlobPath = Join-Path $Path "blobs"
+    $ManifestPath = Join-Path $Path "manifests"
 
-    $Cache.CachePath = $CachePath
+    $Cache.Path = $Path
     $Cache.BlobPath = $BlobPath
     $Cache.ManifestPath = $ManifestPath
-    $Cache.TempPath = $TempPath
 
-    New-Item -Path $CachePath -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+    New-Item -Path $Path -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
     New-Item -Path $BlobPath -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
     New-Item -Path $ManifestPath -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
-    New-Item -Path $TempPath -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
 
     $Cache
 }
@@ -97,6 +93,82 @@ function New-SogarRegistry
     }
 
     $Registry
+}
+
+function Select-SogarRegistry
+{
+    [CmdletBinding()]
+    param(
+        [SogarRegistry] $Registry
+    )
+
+    $global:SOGAR_REGISTRY = $Registry
+}
+
+function Get-SogarRegistry
+{
+    [CmdletBinding()]
+    param(
+        [switch] $Current
+    )
+
+    $Registry = $global:SOGAR_REGISTRY
+
+    if (-Not $Registry) {
+        $Registry = New-SogarRegistry
+        $global:SOGAR_REGISTRY = $Registry
+    }
+
+    $Registry
+}
+
+function Connect-SogarRegistry
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [string] $Url,
+        [string] $Username,
+        [string] $Password
+    )
+
+    if (![string]::IsNullOrEmpty($Url)) {
+        $Env:SOGAR_REGISTRY_URL = $Url
+    }
+
+    if (![string]::IsNullOrEmpty($Username)) {
+        $Env:SOGAR_REGISTRY_USERNAME = $Username
+    }
+
+    if (![string]::IsNullOrEmpty($Password)) {
+        $Env:SOGAR_REGISTRY_PASSWORD = $Password
+    }
+
+    $Registry = New-SogarRegistry -Url:$Url -Username:$Username -Password:$Password
+
+    Select-SogarRegistry $Registry
+}
+
+function Disconnect-SogarRegistry
+{
+    [CmdletBinding()]
+    param(
+
+    )
+
+    if (![string]::IsNullOrEmpty($Url)) {
+        Remove-Item Env:SOGAR_REGISTRY_URL
+    }
+
+    if (![string]::IsNullOrEmpty($Username)) {
+        Remove-Item Env:SOGAR_REGISTRY_USERNAME
+    }
+
+    if (![string]::IsNullOrEmpty($Password)) {
+        Remove-Item Env:SOGAR_REGISTRY_PASSWORD
+    }
+
+    Select-SogarRegistry $null
 }
 
 function Split-SogarReference
@@ -411,7 +483,7 @@ function Import-SogarArtifact
     $ImageName = $RefParts.Name
 
     if (-Not $Registry) {
-        $Registry = New-SogarRegistry
+        $Registry = Get-SogarRegistry -Current
     }
 
     if ([string]::IsNullOrEmpty($AccessToken)) {
@@ -453,7 +525,7 @@ function Export-SogarBlob
     $ImageName = $RefParts.Name
 
     if (-Not $Registry) {
-        $Registry = New-SogarRegistry
+        $Registry = Get-SogarRegistry -Current
     }
 
     $RegistryUrl = $Registry.Url
@@ -547,7 +619,7 @@ function Export-SogarManifest
     $ImageTag = $RefParts.Tag
 
     if (-Not $Registry) {
-        $Registry = New-SogarRegistry
+        $Registry = Get-SogarRegistry -Current
     }
 
     $RegistryUrl = $Registry.Url
@@ -607,125 +679,6 @@ function Export-SogarManifest
     $Response = Invoke-WebRequest @RequestParams -Headers $HeaderParams
 }
 
-function Export-SogarZipArtifact
-{
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true,Position=0)]
-        [string] $Reference,
-        [Parameter(Mandatory=$true,Position=1)]
-        [string] $Path,
-        [string] $MediaType,
-        [string] $AccessToken,
-        [SogarRegistry] $Registry
-    )
-
-    if (-Not $Registry) {
-        $Registry = New-SogarRegistry
-    }
-
-    if (-Not $MediaType) {
-        $MediaType = "application/zip"
-    }
-
-    # compress layers
-
-    $TempArchive = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.zip')
-    Compress-Archive -Path $Path -Destination $TempArchive
-
-    $ArchiveFileHash = Get-FileHash $TempArchive -Algorithm 'SHA256'
-    $ArchiveFileSize = $(Get-Item $TempArchive).Length
-    $ArchiveDigestType = $ArchiveFileHash.Algorithm.ToLower()
-    $ArchiveDigestValue = $ArchiveFileHash.Hash.ToLower()
-    $ArchiveDigest = "$ArchiveDigestType`:$ArchiveDigestValue"
-
-    $Layer = [PSCustomObject]@{
-        mediaType = $MediaType
-        digest = $ArchiveDigest
-        size = $ArchiveFileSize
-    }
-
-    $Layers = @($Layer)
-
-    # config manifest
-
-    $TempConfig = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
-    New-Item -Path $TempConfig -ItemType 'File' | Out-Null
-
-    $ConfigFileHash = Get-FileHash $TempConfig -Algorithm 'SHA256'
-    $ConfigFileSize = $(Get-Item $TempConfig).Length
-    $ConfigDigestType = $ConfigFileHash.Algorithm.ToLower()
-    $ConfigDigestValue = $ConfigFileHash.Hash.ToLower()
-    $ConfigDigest = "$ConfigDigestType`:$ConfigDigestValue"
-
-    $Config = [PSCustomObject]@{
-        mediaType = "application/json"
-        digest = $ConfigDigest
-        size = $ConfigFileSize
-    }
-
-    # main manifest
-
-    $Manifest = [PSCustomObject]@{
-        schemaVersion = 2
-        config = $Config
-        layers = $Layers
-    }
-
-    $ManifestData = $Manifest | ConvertTo-Json
-    $ManifestBytes = $([System.Text.Encoding]::UTF8).GetBytes($ManifestData)
-    $TempManifest = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
-
-    $AsByteStream = if ($PSEdition -eq 'Core') { @{AsByteStream = $true} } else { @{'Encoding' = 'Byte'} }
-    Set-Content -Path $TempManifest -Value $ManifestBytes @AsByteStream
-
-    if ([string]::IsNullOrEmpty($AccessToken)) {
-        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
-    }
-
-    Export-SogarBlob $Reference -Registry $Registry -InputFile $TempArchive -AccessToken $AccessToken
-    Export-SogarBlob $Reference -Registry $Registry -InputFile $TempConfig -AccessToken $AccessToken
-
-    Export-SogarManifest $Reference -Registry $Registry -InputFile $TempManifest -AccessToken $AccessToken
-}
-
-function Import-SogarZipArtifact
-{
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true,Position=0)]
-        [string] $Reference,
-        [Parameter(Mandatory=$true,Position=1)]
-        [string] $DestinationPath
-    )
-
-    $Registry = New-SogarRegistry
-
-    $Cache = $Registry.Cache
-
-    if ([string]::IsNullOrEmpty($AccessToken)) {
-        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
-    }
-
-    $Manifest = Get-SogarManifest -Registry $Registry -Reference $Reference `
-        -Cache $Cache -AccessToken $AccessToken
-
-    $ManifestConfig = $Manifest.Config
-    $BlobFilePath = Save-SogarBlob -Reference $Reference -Registry $Registry -MediaType $ManifestConfig.MediaType `
-        -Digest $ManifestConfig.Digest -BlobPath $Cache.BlobPath -Cache $Cache -AccessToken $AccessToken
-
-    $Config = Get-Content -Path $BlobFilePath -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
-
-    New-Item -Path $DestinationPath -ItemType 'Directory' -ErrorAction SilentlyContinue | Out-Null
-
-    foreach ($Layer in $Manifest.Layers) {
-        $BlobFilePath = Save-SogarBlob -Reference $Reference -Registry $Registry -MediaType $Layer.MediaType `
-            -Digest $Layer.Digest -BlobPath $Cache.BlobPath -Cache $Cache -AccessToken $AccessToken
-
-        Expand-Archive -Path $BlobFilePath -DestinationPath $DestinationPath -Force
-    }
-}
-
 function Export-SogarFileArtifact
 {
     [CmdletBinding()]
@@ -740,11 +693,11 @@ function Export-SogarFileArtifact
     )
 
     if (-Not $Registry) {
-        $Registry = New-SogarRegistry
+        $Registry = Get-SogarRegistry -Current
     }
 
     if (-Not $MediaType) {
-        $MediaType = "application/octet-stream"
+        $MediaType = Get-SogarMimeType $InputFile
     }
 
     $ArtifactFileHash = Get-FileHash $InputFile -Algorithm 'SHA256'
@@ -813,7 +766,7 @@ function Import-SogarFileArtifact
         [string] $DestinationPath
     )
 
-    $Registry = New-SogarRegistry
+    $Registry = Get-SogarRegistry -Current
 
     $Cache = $Registry.Cache
 
@@ -835,5 +788,124 @@ function Import-SogarFileArtifact
             -Digest $Layer.Digest -BlobPath $Cache.BlobPath -Cache $Cache -AccessToken $AccessToken
 
         Copy-Item -Path $BlobFilePath -Destination $DestinationPath -Force
+    }
+}
+
+function Export-SogarArchiveArtifact
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [string] $Reference,
+        [Parameter(Mandatory=$true,Position=1)]
+        [string] $Path,
+        [string] $MediaType,
+        [string] $AccessToken,
+        [SogarRegistry] $Registry
+    )
+
+    if (-Not $Registry) {
+        $Registry = Get-SogarRegistry -Current
+    }
+
+    if (-Not $MediaType) {
+        $MediaType = "application/zip"
+    }
+
+    # compress layers
+
+    $TempArchive = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.zip')
+    Compress-Archive -Path $Path -Destination $TempArchive
+
+    $ArchiveFileHash = Get-FileHash $TempArchive -Algorithm 'SHA256'
+    $ArchiveFileSize = $(Get-Item $TempArchive).Length
+    $ArchiveDigestType = $ArchiveFileHash.Algorithm.ToLower()
+    $ArchiveDigestValue = $ArchiveFileHash.Hash.ToLower()
+    $ArchiveDigest = "$ArchiveDigestType`:$ArchiveDigestValue"
+
+    $Layer = [PSCustomObject]@{
+        mediaType = $MediaType
+        digest = $ArchiveDigest
+        size = $ArchiveFileSize
+    }
+
+    $Layers = @($Layer)
+
+    # config manifest
+
+    $TempConfig = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
+    New-Item -Path $TempConfig -ItemType 'File' | Out-Null
+
+    $ConfigFileHash = Get-FileHash $TempConfig -Algorithm 'SHA256'
+    $ConfigFileSize = $(Get-Item $TempConfig).Length
+    $ConfigDigestType = $ConfigFileHash.Algorithm.ToLower()
+    $ConfigDigestValue = $ConfigFileHash.Hash.ToLower()
+    $ConfigDigest = "$ConfigDigestType`:$ConfigDigestValue"
+
+    $Config = [PSCustomObject]@{
+        mediaType = "application/json"
+        digest = $ConfigDigest
+        size = $ConfigFileSize
+    }
+
+    # main manifest
+
+    $Manifest = [PSCustomObject]@{
+        schemaVersion = 2
+        config = $Config
+        layers = $Layers
+    }
+
+    $ManifestData = $Manifest | ConvertTo-Json
+    $ManifestBytes = $([System.Text.Encoding]::UTF8).GetBytes($ManifestData)
+    $TempManifest = [IO.Path]::ChangeExtension($(New-TemporaryFile), '.json')
+
+    $AsByteStream = if ($PSEdition -eq 'Core') { @{AsByteStream = $true} } else { @{'Encoding' = 'Byte'} }
+    Set-Content -Path $TempManifest -Value $ManifestBytes @AsByteStream
+
+    if ([string]::IsNullOrEmpty($AccessToken)) {
+        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
+    }
+
+    Export-SogarBlob $Reference -Registry $Registry -InputFile $TempArchive -AccessToken $AccessToken
+    Export-SogarBlob $Reference -Registry $Registry -InputFile $TempConfig -AccessToken $AccessToken
+
+    Export-SogarManifest $Reference -Registry $Registry -InputFile $TempManifest -AccessToken $AccessToken
+}
+
+function Import-SogarArchiveArtifact
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [string] $Reference,
+        [Parameter(Mandatory=$true,Position=1)]
+        [string] $DestinationPath
+    )
+
+    $Registry = Get-SogarRegistry -Current
+
+    $Cache = $Registry.Cache
+
+    if ([string]::IsNullOrEmpty($AccessToken)) {
+        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
+    }
+
+    $Manifest = Get-SogarManifest -Registry $Registry -Reference $Reference `
+        -Cache $Cache -AccessToken $AccessToken
+
+    $ManifestConfig = $Manifest.Config
+    $BlobFilePath = Save-SogarBlob -Reference $Reference -Registry $Registry -MediaType $ManifestConfig.MediaType `
+        -Digest $ManifestConfig.Digest -BlobPath $Cache.BlobPath -Cache $Cache -AccessToken $AccessToken
+
+    $Config = Get-Content -Path $BlobFilePath -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+
+    New-Item -Path $DestinationPath -ItemType 'Directory' -ErrorAction SilentlyContinue | Out-Null
+
+    foreach ($Layer in $Manifest.Layers) {
+        $BlobFilePath = Save-SogarBlob -Reference $Reference -Registry $Registry -MediaType $Layer.MediaType `
+            -Digest $Layer.Digest -BlobPath $Cache.BlobPath -Cache $Cache -AccessToken $AccessToken
+
+        Expand-Archive -Path $BlobFilePath -DestinationPath $DestinationPath -Force
     }
 }

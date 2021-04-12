@@ -1,5 +1,6 @@
 use std::{
     fs::File,
+    io,
     io::{Error, ErrorKind, Read},
     path::Path,
 };
@@ -53,7 +54,7 @@ pub enum SogarError {
     #[error(transparent)]
     RequestError(#[from] reqwest::Error),
     #[error(transparent)]
-    StdError(#[from] std::io::Error),
+    IoError(#[from] std::io::Error),
     #[error(transparent)]
     StrError(#[from] ToStrError),
     #[error(transparent)]
@@ -82,7 +83,7 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
             layers,
         };
 
-        let manifest_file = create_manifest(&manifest).await?;
+        let manifest_file = create_file_info(manifest).await?;
 
         let access_token = get_access_token(&settings).await?;
         if let Some(reference) = parse_namespace(&settings) {
@@ -93,10 +94,11 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
             export_sogar_manifest(&settings, access_token, reference, manifest_file).await?;
         }
     }
+
     Ok(())
 }
 
-async fn create_manifest(manifest: &Manifest) -> Result<FileInfo, std::io::Error> {
+async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
     let manifest_json = ::serde_json::to_string(&manifest)?;
     let manifest_bytes = manifest_json.as_bytes();
 
@@ -110,7 +112,7 @@ async fn create_manifest(manifest: &Manifest) -> Result<FileInfo, std::io::Error
     })
 }
 
-async fn read_file_data(file_path: &Path, media_type: String) -> Result<FileInfo, std::io::Error> {
+async fn read_file_data(file_path: &Path, media_type: String) -> io::Result<FileInfo> {
     let mut file = File::open(file_path)?;
     let file_size = file.metadata()?.len();
 
@@ -145,19 +147,23 @@ async fn get_access_token(settings: &Settings) -> Result<String, SogarError> {
     }
 
     if let Some(reference) = parse_namespace(settings) {
+        let scope = format!(
+            "repository:{}/{}:pull repository:{}/{}:pull,push",
+            reference.repository, reference.name, reference.repository, reference.name
+        );
+
+        let service = Url::parse(settings.registry_url.clone().as_str())?
+            .host_str()
+            .unwrap()
+            .to_string();
+
         let token_data = AccessToken {
             client_id: String::from("sogar"),
             grant_type: String::from("password"),
             username: settings.username.clone(),
             password: settings.password.clone(),
-            scope: format!(
-                "repository:{}/{}:pull repository:{}/{}:pull,push",
-                reference.repository, reference.name, reference.repository, reference.name
-            ),
-            service: Url::parse(settings.registry_url.clone().as_str())?
-                .host_str()
-                .unwrap()
-                .to_string(),
+            scope,
+            service,
         };
 
         let client = Client::new();
@@ -189,7 +195,7 @@ async fn export_sogar_blob(
     let client = Client::new();
 
     let export = settings.export.as_ref();
-    if let None = export {
+    if export.is_none() {
         return Err(str_to_sogar_error("Export struct is empty"));
     }
 
@@ -234,7 +240,7 @@ async fn export_sogar_blob(
     if post_response.headers().contains_key(LOCATION) {
         let location_header = post_response.headers().get(LOCATION);
 
-        if let None = location_header {
+        if location_header.is_none() {
             return Err(str_to_sogar_error("Location header is empty"));
         }
 
@@ -258,6 +264,7 @@ async fn export_sogar_blob(
 
         handle_response(put_response, PUT, put_url.as_str())?;
     }
+
     Ok(())
 }
 
@@ -282,6 +289,7 @@ async fn export_sogar_manifest(
         reference.name.clone(),
         tag.clone()
     );
+
     let head_response = client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
@@ -330,7 +338,7 @@ fn handle_response(response: Response, request_type: &str, url: &str) -> Result<
 }
 
 fn str_to_sogar_error(error: &str) -> SogarError {
-    SogarError::StdError(Error::new(ErrorKind::InvalidData, error))
+    SogarError::IoError(Error::new(ErrorKind::InvalidData, error))
 }
 
 fn parse_namespace(settings: &Settings) -> Option<Reference> {
@@ -354,13 +362,14 @@ fn parse_namespace(settings: &Settings) -> Option<Reference> {
             let max_items_size = 3;
 
             let split = reference.split(value.as_slice());
-            let items = split.into_iter().map(|item| item.to_string()).collect::<Vec<String>>();
+            let items = split.into_iter().map(ToString::to_string).collect::<Vec<String>>();
 
             let tag = if items.len() == max_items_size {
                 Some(items[tag_index].clone())
             } else {
                 None
             };
+
             return Some(Reference {
                 repository: items[repository_index].clone(),
                 name: items[name_index].clone(),
@@ -368,13 +377,12 @@ fn parse_namespace(settings: &Settings) -> Option<Reference> {
             });
         }
     }
+
     None
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::r#mod::sogar_config::Export;
-
     use super::*;
     use crate::sogar::sogar_config::Export;
 
@@ -392,7 +400,7 @@ mod tests {
         };
 
         let reference = parse_namespace(&settings);
-        assert_eq!(true, reference.is_some());
+        assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
         assert_eq!(reference.name, String::from("demo"));
@@ -414,7 +422,7 @@ mod tests {
         };
 
         let reference = parse_namespace(&settings);
-        assert_eq!(true, reference.is_some());
+        assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
         assert_eq!(reference.name, String::from("demo"));
@@ -435,6 +443,6 @@ mod tests {
         };
 
         let reference = parse_namespace(&settings);
-        assert_eq!(true, reference.is_none());
+        assert_eq!(reference.is_none(), true);
     }
 }

@@ -21,25 +21,26 @@ pub fn init_logger(file_path: Option<String>) -> Logger {
     logger
 }
 
-pub fn setup_logger(file_path: Option<String>) -> Logger {
-    let drain = if let Some(file_path) = file_path {
-        let outfile = OpenOptions::new().create(true).append(true).open(file_path).unwrap();
+fn setup_logger(file_path: Option<String>) -> Logger {
+    let drain = match file_path {
+        Some(file_path) => {
+            let outfile = OpenOptions::new().create(true).append(true).open(file_path).unwrap();
 
-        let file_decorator = PlainDecorator::new(outfile);
-        create_drain(file_decorator)
-    } else {
-        let decorator = TermDecorator::new().build();
-        create_drain(decorator)
+            let file_decorator = PlainDecorator::new(outfile);
+            create_drain(file_decorator)
+        }
+        None => {
+            let decorator = TermDecorator::new().build();
+            create_drain(decorator)
+        }
     };
 
-    let logger = Logger::root(
+    Logger::root(
         drain,
         o!("module" => FnValue(move |info| {
             format!("[{}]", info.module())
         })),
-    );
-
-    logger
+    )
 }
 
 fn create_drain<T: Decorator + Send + 'static>(decorator: T) -> Fuse<Async> {

@@ -3,21 +3,21 @@ use config::{Config as ConfigCache, ConfigError};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
-static REGISTRY_URL: &str = "registry-url";
-static ENV_REGISTRY_URL: &str = "REGISTRY_URL";
-static USERNAME: &str = "username";
-static ENV_USERNAME: &str = "USERNAME";
-static PASSWORD: &str = "password";
-static ENV_PASSWORD: &str = "PASSWORD";
-static MEDIA_TYPE: &str = "media-type";
-static VALUE_MEDIA_TYPE: &str = "MEDIA_TYPE";
-static REFERENCE: &str = "reference";
-static VALUE_REFERENCE: &str = "REFERENCE";
-static FILE_PATH: &str = "filepath";
-static VALUE_FILE_PATH: &str = "FILE_PATH";
-static EXPORT_ARTIFACT: &str = "export-artifact";
-static VALUE_EXPORT_ARTIFACT: &str = "EXPORT_ARTIFACT";
-static EXPORT: &str = "export";
+const REGISTRY_URL: &str = "registry-url";
+const ENV_REGISTRY_URL: &str = "REGISTRY_URL";
+const USERNAME: &str = "username";
+const ENV_USERNAME: &str = "USERNAME";
+const PASSWORD: &str = "password";
+const ENV_PASSWORD: &str = "PASSWORD";
+const MEDIA_TYPE: &str = "media-type";
+const VALUE_MEDIA_TYPE: &str = "MEDIA_TYPE";
+const REFERENCE: &str = "reference";
+const VALUE_REFERENCE: &str = "REFERENCE";
+const FILE_PATH: &str = "filepath";
+const VALUE_FILE_PATH: &str = "FILE_PATH";
+const EXPORT_ARTIFACT: &str = "export-artifact";
+const VALUE_EXPORT_ARTIFACT: &str = "EXPORT_ARTIFACT";
+const EXPORT: &str = "export";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Export {

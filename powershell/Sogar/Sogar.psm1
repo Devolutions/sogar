@@ -6,6 +6,8 @@ class SogarCache
     [string] $Path
     [string] $BlobPath
     [string] $ManifestPath
+
+    SogarCache() { }
 }
 
 function New-SogarCache
@@ -48,6 +50,8 @@ class SogarRegistry
     [string] $Password
     [string] $AccessToken
     [SogarCache] $Cache
+
+    SogarRegistry() { }
 }
 
 function New-SogarRegistry
@@ -169,6 +173,66 @@ function Disconnect-SogarRegistry
     }
 
     Select-SogarRegistry $null
+}
+
+function Get-SogarAccessToken
+{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [string] $Reference,
+        [string] $RegistryUrl,
+        [string] $Username,
+        [string] $Password,
+        [string] $ServiceName,
+        [SogarRegistry] $Registry
+    )
+
+    $RefParts = Split-SogarReference $Reference -NoTag
+    $Repository = $RefParts.Repository
+    $ImageName = $RefParts.Name
+
+    if ($Registry) {
+        if ([string]::IsNullOrEmpty($RegistryUrl)) {
+            $RegistryUrl = $Registry.Url
+        }
+        if ([string]::IsNullOrEmpty($Username)) {
+            $Username = $Registry.Username
+        }
+        if ([string]::IsNullOrEmpty($Password)) {
+            $Password = $Registry.Password
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($ServiceName)) {
+        $ServiceName = [System.Uri]::new($RegistryUrl).Host
+    }
+
+    $Scopes = @("repository:$Repository/$ImageName`:pull",
+        "repository:$Repository/$ImageName`:pull,push")
+
+    $PostParams = @{
+        client_id = 'sogar';
+        grant_type = 'password';
+        username = $Username;
+        password = $Password;
+        scope = $($Scopes -Join ' ');
+        service = $ServiceName;
+    }
+
+    $RequestParams = @{
+        Method = 'POST';
+        UseBasicParsing = $true;
+        Uri = "$RegistryUrl/oauth2/token";
+    }
+
+    $Response = Invoke-WebRequest @RequestParams -Body $PostParams
+
+    $ResponseContent = $Response.Content | ConvertFrom-Json
+
+    $AccessToken = $ResponseContent.access_token
+
+    $AccessToken
 }
 
 function Split-SogarReference
@@ -314,66 +378,6 @@ function Invoke-SogarWebRequest
     $Response
 }
 
-function Get-SogarAccessToken
-{
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true,Position=0)]
-        [string] $Reference,
-        [string] $RegistryUrl,
-        [string] $Username,
-        [string] $Password,
-        [string] $ServiceName,
-        [SogarRegistry] $Registry
-    )
-
-    $RefParts = Split-SogarReference $Reference -NoTag
-    $Repository = $RefParts.Repository
-    $ImageName = $RefParts.Name
-
-    if ($Registry) {
-        if ([string]::IsNullOrEmpty($RegistryUrl)) {
-            $RegistryUrl = $Registry.Url
-        }
-        if ([string]::IsNullOrEmpty($Username)) {
-            $Username = $Registry.Username
-        }
-        if ([string]::IsNullOrEmpty($Password)) {
-            $Password = $Registry.Password
-        }
-    }
-
-    if ([string]::IsNullOrEmpty($ServiceName)) {
-        $ServiceName = [System.Uri]::new($RegistryUrl).Host
-    }
-
-    $Scopes = @("repository:$Repository/$ImageName`:pull",
-        "repository:$Repository/$ImageName`:pull,push")
-
-    $PostParams = @{
-        client_id = 'sogar';
-        grant_type = 'password';
-        username = $Username;
-        password = $Password;
-        scope = $($Scopes -Join ' ');
-        service = $ServiceName;
-    }
-
-    $RequestParams = @{
-        Method = 'POST';
-        UseBasicParsing = $true;
-        Uri = "$RegistryUrl/oauth2/token";
-    }
-
-    $Response = Invoke-WebRequest @RequestParams -Body $PostParams
-
-    $ResponseContent = $Response.Content | ConvertFrom-Json
-
-    $AccessToken = $ResponseContent.access_token
-
-    $AccessToken
-}
-
 function Get-SogarManifest
 {
     [CmdletBinding()]
@@ -397,7 +401,7 @@ function Get-SogarManifest
         }
 
         if ([string]::IsNullOrEmpty($AccessToken)) {
-            $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
+            $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
         }
     }
 
@@ -421,6 +425,8 @@ function Get-SogarManifest
     }
     
     $Response = Invoke-WebRequest @RequestParams
+
+    $Cache = $Registry.Cache
 
     if ($Cache) {
         $ManifestFile = Join-Path $Cache.ManifestPath "$Repository/$ImageName/$ImageTag"
@@ -462,7 +468,7 @@ function Save-SogarBlob
         }
 
         if ([string]::IsNullOrEmpty($AccessToken)) {
-            $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
+            $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
         }
     }
 
@@ -482,16 +488,20 @@ function Save-SogarBlob
 
     $OutputBlobFile = Join-Path $DigestBlobPath $DigestValue
 
-    $RequestParams = @{
-        Method = 'GET';
-        Headers = $Headers;
-        UseBasicParsing = $true;
-        Uri = "$RegistryUrl/v2/$Repository/$ImageName/blobs/$Digest";
-        OutFile = $OutputBlobFile
-        Passthru = $true;
+    if (Test-Path $OutputBlobFile -Type 'Leaf') {
+        Write-Verbose "blob $DigestValue already found in local cache, skipping pull"
+    } else {
+        $RequestParams = @{
+            Method = 'GET';
+            Headers = $Headers;
+            UseBasicParsing = $true;
+            Uri = "$RegistryUrl/v2/$Repository/$ImageName/blobs/$Digest";
+            OutFile = $OutputBlobFile
+            Passthru = $true;
+        }
+    
+        $Response = Invoke-SogarWebRequest $RequestParams
     }
-
-    $Response = Invoke-SogarWebRequest $RequestParams
 
     $OutputBlobFile
 }
@@ -515,7 +525,7 @@ function Import-SogarArtifact
     }
 
     if ([string]::IsNullOrEmpty($AccessToken)) {
-        $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
+        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
     }
 
     $Cache = $Registry.Cache
@@ -559,7 +569,7 @@ function Export-SogarBlob
     $RegistryUrl = $Registry.Url
 
     if ([string]::IsNullOrEmpty($AccessToken)) {
-        $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
+        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
     }
 
     $FileHash = Get-FileHash $InputFile -Algorithm 'SHA256'
@@ -590,6 +600,7 @@ function Export-SogarBlob
     $Response = Invoke-SogarWebRequest $RequestParams
 
     if ($Response.StatusCode -eq 200) {
+        Write-Verbose "blob $DigestValue already found in registry, skipping push"
         return;
     }
 
@@ -656,7 +667,7 @@ function Export-SogarManifest
     $RegistryUrl = $Registry.Url
 
     if ([string]::IsNullOrEmpty($AccessToken)) {
-        $AccessToken = Get-SogarAccessToken "$Repository/$ImageName" -Registry $Registry
+        $AccessToken = Get-SogarAccessToken $Reference -Registry $Registry
     }
 
     # https://github.com/opencontainers/image-spec/blob/master/manifest.md

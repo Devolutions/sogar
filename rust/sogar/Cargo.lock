@@ -1099,7 +1099,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sogar-rs"
+name = "sogar"
 version = "0.1.0"
 dependencies = [
  "clap",

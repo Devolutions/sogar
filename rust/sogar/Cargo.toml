@@ -1,5 +1,5 @@
 [package]
-name = "sogar-rs"
+name = "sogar"
 version = "0.1.0"
 authors = ["Anastasiia Romaniuk <romaniuk.anastasiia@apriorit.com>"]
 edition = "2018"

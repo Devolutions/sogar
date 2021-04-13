@@ -16,10 +16,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::{ParseError, Url};
 
-use sogar_config::Settings;
+use crate::sogar_config::Settings;
 use tempfile::NamedTempFile;
-
-pub mod sogar_config;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -384,7 +382,7 @@ fn parse_namespace(settings: &Settings) -> Option<Reference> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sogar::sogar_config::Export;
+    use crate::r#mod::sogar_config::Export;
 
     #[test]
     fn test_reference_with_tag() {

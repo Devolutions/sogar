@@ -1,13 +1,10 @@
-use sogar_rs::{
-    logger::init_logger,
-    sogar::{
-        export_sogar_file_artifact,
-        sogar_config::{create_command_line_app, match_arguments, Settings},
-    },
-};
-
 use config::Config as ConfigCache;
 use slog_scope_futures::FutureExt;
+use sogar::{
+    export_sogar_file_artifact,
+    logger::init_logger,
+    sogar_config::{create_command_line_app, match_arguments, Settings},
+};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {

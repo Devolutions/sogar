@@ -1,0 +1,27 @@
+[package]
+name = "sogar"
+version = "0.1.0"
+authors = ["Anastasiia Romaniuk <romaniuk.anastasiia@apriorit.com>"]
+edition = "2018"
+
+[dependencies]
+reqwest = { version = "0.11.2", features = ["json", "stream"]}
+clap = "2.31"
+config = { version = "0.10", default-features = false, features = ["yaml"] }
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+sha2 = "0.8"
+url = "1.7.1"
+regex = "0.2"
+tokio = { version = "1.4.0", features = ["rt", "rt-multi-thread", "macros"]}
+tempfile = "3.0"
+thiserror = "1.0.23"
+
+# logging
+slog =  "2.5"
+slog-term = "2.4"
+slog-async = "2.3"
+slog-scope = "4.3"
+slog-envlogger = "2.2"
+slog-scope-futures = "0.1.1"
+slog-stdlog = "4.0"

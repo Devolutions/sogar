@@ -74,9 +74,12 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
     if let Some(export) = &settings.export {
         let push_file_path = Path::new(export.filepath.as_str());
 
-        let file_name = push_file_path.file_stem().map_or(String::new(), |stem| {
-            stem.to_str().map_or(String::new(), |stem_str| stem_str.to_string())
-        });
+        let file_name = push_file_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default()
+            .to_string();
 
         let mut annotations_map = HashMap::new();
         annotations_map.insert(String::from(IMAGE_TITLE), file_name);

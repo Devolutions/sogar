@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io,
     io::{Error, ErrorKind, Read},
@@ -17,6 +18,7 @@ use thiserror::Error;
 use url::{ParseError, Url};
 
 use crate::sogar_config::Settings;
+use slog_scope::info;
 use tempfile::NamedTempFile;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -25,6 +27,8 @@ pub struct Layer {
     pub media_type: String,
     pub digest: String,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -64,16 +68,30 @@ const PUT: &str = "Put";
 const POST: &str = "Post";
 
 const OCTET_STREAM: &str = "application/octet-stream";
+const IMAGE_TITLE: &str = "org.opencontainers.image.title";
 
 pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), SogarError> {
     if let Some(export) = &settings.export {
-        let push_data = read_file_data(Path::new(export.filepath.as_str()), export.media_type.clone()).await?;
+        let push_file_path = Path::new(export.filepath.as_str());
+
+        let file_name = push_file_path.file_stem().map_or(String::new(), |stem| {
+            stem.to_str().map_or(String::new(), |stem_str| stem_str.to_string())
+        });
+
+        let mut annotations_map = HashMap::new();
+        annotations_map.insert(String::from(IMAGE_TITLE), file_name);
+        let push_data = read_file_data(push_file_path, export.media_type.clone(), Some(annotations_map)).await?;
 
         let mut layers = Vec::new();
         layers.push(push_data.layer.clone());
 
         let config_file = NamedTempFile::new()?;
-        let config_data = read_file_data(config_file.path(), String::from("application/json")).await?;
+        let config_data = read_file_data(
+            config_file.path(),
+            String::from("application/vnd.oci.image.config.v1+json"),
+            None,
+        )
+        .await?;
 
         let manifest = Manifest {
             schema_version: 2,
@@ -106,11 +124,16 @@ async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
             media_type: String::from("application/vnd.oci.image.manifest.v1+json"),
             digest: String::new(),
             size: manifest_bytes.len() as u64,
+            annotations: None,
         },
     })
 }
 
-async fn read_file_data(file_path: &Path, media_type: String) -> io::Result<FileInfo> {
+async fn read_file_data(
+    file_path: &Path,
+    media_type: String,
+    annotations: Option<HashMap<String, String>>,
+) -> io::Result<FileInfo> {
     let mut file = File::open(file_path)?;
     let file_size = file.metadata()?.len();
 
@@ -128,6 +151,7 @@ async fn read_file_data(file_path: &Path, media_type: String) -> io::Result<File
         media_type,
         digest: artifact_digest,
         size: file_size,
+        annotations,
     };
 
     Ok(FileInfo { data, layer })
@@ -197,10 +221,6 @@ async fn export_sogar_blob(
         return Err(str_to_sogar_error("Export struct is empty"));
     }
 
-    let export = export.unwrap();
-
-    let media_type = export.media_type.clone();
-
     let head_url = format!(
         "{}/v2/{}/{}/blobs/{}",
         settings.registry_url.clone(),
@@ -212,11 +232,17 @@ async fn export_sogar_blob(
     let head_response = client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
-        .header(ACCEPT, media_type)
+        .header(ACCEPT, file_info.layer.media_type.clone())
         .send()
         .await?;
 
-    handle_response(head_response, HEAD, head_url.as_str())?;
+    if head_response.status() == 200 {
+        info!(
+            "Blob {} already found in registry, skipping push",
+            file_info.layer.digest
+        );
+        return Ok(());
+    }
 
     let post_url = format!(
         "{}/v2/{}/{}/blobs/uploads/",
@@ -382,7 +408,7 @@ fn parse_namespace(settings: &Settings) -> Option<Reference> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::r#mod::sogar_config::Export;
+    use crate::sogar_config::Export;
 
     #[test]
     fn test_reference_with_tag() {

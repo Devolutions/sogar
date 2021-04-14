@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
 const REGISTRY_URL: &str = "registry-url";
-const ENV_REGISTRY_URL: &str = "REGISTRY_URL";
+const ENV_REGISTRY_URL: &str = "SOGAR_REGISTRY_URL";
 const USERNAME: &str = "username";
-const ENV_USERNAME: &str = "USERNAME";
+const ENV_USERNAME: &str = "SOGAR_REGISTRY_USERNAME";
 const PASSWORD: &str = "password";
-const ENV_PASSWORD: &str = "PASSWORD";
+const ENV_PASSWORD: &str = "SOGAR_REGISTRY_PASSWORD";
 const MEDIA_TYPE: &str = "media-type";
 const VALUE_MEDIA_TYPE: &str = "MEDIA_TYPE";
 const REFERENCE: &str = "reference";

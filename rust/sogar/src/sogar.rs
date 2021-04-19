@@ -83,7 +83,9 @@ const POST: &str = "Post";
 const OCTET_STREAM: &str = "application/octet-stream";
 const IMAGE_TITLE: &str = "org.opencontainers.image.title";
 
-pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), SogarError> {
+pub type SogarResult<T> = Result<T, SogarError>;
+
+pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
     let export = settings.command_data.clone();
 
     let access_token = get_access_token(&settings).await?;
@@ -130,7 +132,7 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
     Ok(())
 }
 
-pub async fn import_sogar_file_artifact(settings: &Settings) -> Result<(), SogarError> {
+pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
     let import = settings.command_data.clone();
     let access_token = get_access_token(&settings).await?;
 
@@ -152,8 +154,7 @@ pub async fn import_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
         )
         .await?;
 
-        let mut blob_path = PathBuf::from("");
-        let mut new_path_buff;
+        let mut blob_path = PathBuf::new();
         for (count, blob) in manifest.layers.iter().enumerate() {
             let from_path = save_sogar_blob(
                 &settings,
@@ -168,29 +169,30 @@ pub async fn import_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
                 blob_path = PathBuf::from(out_file_path.get(count).unwrap_or(&"".to_string()));
             }
 
-            if blob_path.is_dir() {
-                new_path_buff = create_file_name_from_layer(&blob, blob_path.as_path());
-                if new_path_buff.exists() {
-                    new_path_buff = update_file_name(new_path_buff.as_path(), count + 1);
+            let new_path_buf = if blob_path.is_dir() {
+                let mut path_buf = create_file_name_from_layer(&blob, blob_path.as_path());
+                if path_buf.exists() {
+                    path_buf = update_file_name(path_buf.as_path(), count + 1);
                 }
+                path_buf
             } else if blob_path.exists() {
-                new_path_buff = update_file_name(blob_path.as_path(), count + 1);
+                update_file_name(blob_path.as_path(), count + 1)
             } else {
-                new_path_buff = PathBuf::from(blob_path.to_str().unwrap_or(""))
-            }
+                PathBuf::from(blob_path.to_str().unwrap_or_default())
+            };
 
-            fs::copy(from_path, new_path_buff)?;
+            fs::copy(from_path, new_path_buf)?;
         }
     }
 
     Ok(())
 }
 
-async fn create_sogar_cache(path: Option<String>) -> Result<SogarCache, SogarError> {
+async fn create_sogar_cache(path: Option<String>) -> SogarResult<SogarCache> {
     let path_buff = match path {
         Some(cache_dir) => PathBuf::from(cache_dir),
         None => {
-            let home_path = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from(""));
+            let home_path = dirs_next::home_dir().unwrap_or_default();
             home_path.join(".sogar")
         }
     };
@@ -218,14 +220,11 @@ async fn create_sogar_cache(path: Option<String>) -> Result<SogarCache, SogarErr
 
 fn create_file_name_from_layer(layer: &Layer, path: &Path) -> PathBuf {
     let digest_part_option = parse_digest(layer.digest.clone());
-    let name = if let Some(annotations) = &layer.annotations {
-        if !annotations.is_empty() && annotations.contains_key(IMAGE_TITLE) {
+    let name = match &layer.annotations {
+        Some(annotations) if !annotations.is_empty() && annotations.contains_key(IMAGE_TITLE) => {
             annotations.get(IMAGE_TITLE).unwrap_or(&"".to_string()).to_string()
-        } else {
-            digest_part_option.map_or("".to_string(), |digest_part| digest_part.value)
         }
-    } else {
-        digest_part_option.map_or("".to_string(), |digest_part| digest_part.value)
+        _ => digest_part_option.map_or("".to_string(), |digest_part| digest_part.value),
     };
 
     path.join(name)
@@ -289,7 +288,7 @@ async fn read_file_data(
     Ok(FileInfo { data, layer })
 }
 
-async fn get_access_token(settings: &Settings) -> Result<String, SogarError> {
+async fn get_access_token(settings: &Settings) -> SogarResult<String> {
     #[derive(Serialize, Deserialize, Debug)]
     pub struct AccessToken {
         client_id: String,
@@ -345,7 +344,7 @@ async fn export_sogar_blob(
     access_token: String,
     reference: Reference,
     file_info: FileInfo,
-) -> Result<(), SogarError> {
+) -> SogarResult<()> {
     let client = Client::new();
 
     let head_url = format!(
@@ -381,7 +380,7 @@ async fn export_sogar_blob(
     let post_response = client
         .post(post_url.as_str())
         .bearer_auth(access_token.clone())
-        .header(CONTENT_LENGTH, 0 as u64)
+        .header(CONTENT_LENGTH, 0_u64)
         .header(CONTENT_TYPE, OCTET_STREAM)
         .send()
         .await?;
@@ -425,7 +424,7 @@ async fn save_sogar_blob(
     reference: Reference,
     layer: Layer,
     sogar_cache: &SogarCache,
-) -> Result<PathBuf, SogarError> {
+) -> SogarResult<PathBuf> {
     let client = Client::new();
     let blob_digest = parse_digest(layer.digest.clone());
     if blob_digest.is_none() {
@@ -477,7 +476,7 @@ async fn export_sogar_manifest(
     access_token: String,
     reference: Reference,
     file_info: FileInfo,
-) -> Result<(), SogarError> {
+) -> SogarResult<()> {
     let client = Client::new();
     let media_type = file_info.layer.media_type.as_str();
 
@@ -530,7 +529,7 @@ async fn get_sogar_manifest(
     access_token: String,
     reference: Reference,
     sogar_cache: &SogarCache,
-) -> Result<Manifest, SogarError> {
+) -> SogarResult<Manifest> {
     let client = Client::new();
     let accept_list = format!(
         "{},{},{},{},{}",
@@ -578,7 +577,7 @@ async fn get_sogar_manifest(
     Ok(get_response)
 }
 
-fn handle_response(response: Response, request_type: &str, url: &str) -> Result<Response, SogarError> {
+fn handle_response(response: Response, request_type: &str, url: &str) -> SogarResult<Response> {
     if !response.status().is_success() {
         Err(str_to_sogar_error(
             format!(
@@ -686,11 +685,16 @@ mod tests {
 
     #[test]
     fn test_correct_digest() {
-        let blob_digest = parse_digest(String::from("sha256:0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8"));
+        let blob_digest = parse_digest(String::from(
+            "sha256:0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8",
+        ));
         assert_eq!(blob_digest.is_some(), true);
         let blob_digest = blob_digest.unwrap();
         assert_eq!(blob_digest.digest_type, String::from("sha256"));
-        assert_eq!(blob_digest.value, String::from("0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8"));
+        assert_eq!(
+            blob_digest.value,
+            String::from("0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8")
+        );
     }
 
     #[test]
@@ -702,12 +706,12 @@ mod tests {
     #[test]
     fn create_file_name_from_layer_created_from_digest() {
         let hash = "0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8";
-        let path  = Path::new("test");
+        let path = Path::new("test");
         let layer = Layer {
             media_type: "".to_string(),
             digest: format!("sha256:{}", hash),
             size: 0,
-            annotations: None
+            annotations: None,
         };
 
         let result = create_file_name_from_layer(&layer, path);
@@ -721,12 +725,12 @@ mod tests {
         let mut annotations = HashMap::new();
         annotations.insert(String::from(IMAGE_TITLE), filename.clone());
 
-        let path  = Path::new("test");
+        let path = Path::new("test");
         let layer = Layer {
             media_type: "".to_string(),
             digest: format!("sha256:{}", hash),
             size: 0,
-            annotations: Some(annotations)
+            annotations: Some(annotations),
         };
 
         let result = create_file_name_from_layer(&layer, path);

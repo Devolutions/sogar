@@ -81,21 +81,24 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
 
     let file_paths = matches
         .values_of(FILE_PATH)
-        .unwrap_or_else(Default::default)
+        .unwrap_or_default()
         .map(|plugin| plugin.to_string())
         .collect::<Vec<String>>();
 
     for filepath in &file_paths {
-        if let Some(media_type) = matches.value_of(MEDIA_TYPE) {
-            config_cache.set(
-                format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
-                media_type.to_string(),
-            )?;
-        } else {
-            config_cache.set(
-                format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
-                get_mime_type_from_file_extension(filepath.to_string()),
-            )?;
+        match matches.value_of(MEDIA_TYPE) {
+            Some(media_type) => {
+                config_cache.set(
+                    format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
+                    media_type.to_string(),
+                )?;
+            }
+            None => {
+                config_cache.set(
+                    format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
+                    get_mime_type_from_file_extension(filepath.to_string()),
+                )?;
+            }
         }
     }
 

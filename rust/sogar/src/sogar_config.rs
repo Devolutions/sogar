@@ -17,14 +17,25 @@ const FILE_PATH: &str = "filepath";
 const VALUE_FILE_PATH: &str = "FILE_PATH";
 const EXPORT_ARTIFACT: &str = "export-artifact";
 const VALUE_EXPORT_ARTIFACT: &str = "EXPORT_ARTIFACT";
-const EXPORT: &str = "export";
+const IMPORT_ARTIFACT: &str = "import-artifact";
+const VALUE_IMPORT_ARTIFACT: &str = "IMPORT_ARTIFACT";
+const ENV_REGISTRY_CACHE: &str = "SOGAR_REGISTRY_CACHE";
+const REGISTRY_CACHE: &str = "registry-cache";
+const COMMAND_DATA: &str = "command_data";
+const COMMAND_TYPE: &str = "command_type";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Export {
+pub enum CommandType {
+    Export,
+    Import,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CommandData {
     #[serde(rename = "media-type")]
     pub media_type: String,
     pub reference: String,
-    pub filepath: String,
+    pub filepath: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -33,7 +44,19 @@ pub struct Settings {
     pub registry_url: String,
     pub username: String,
     pub password: String,
-    pub export: Option<Export>,
+    pub command_type: CommandType,
+    pub command_data: CommandData,
+    #[serde(rename = "registry-cache")]
+    pub registry_cache: Option<String>,
+}
+
+impl From<CommandType> for config::Value {
+    fn from(val: CommandType) -> Self {
+        match val {
+            CommandType::Export => config::Value::from(String::from("Export")),
+            CommandType::Import => config::Value::from(String::from("Import")),
+        }
+    }
 }
 
 pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> Result<(), ConfigError> {
@@ -49,23 +72,45 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
         config_cache.set(PASSWORD, password.to_string())?;
     }
 
+    if let Some(namespace) = matches.value_of(REFERENCE) {
+        config_cache.set(
+            format!("{}.{}", COMMAND_DATA, REFERENCE).as_str(),
+            namespace.to_string(),
+        )?;
+    }
+
+    let file_paths = matches
+        .values_of(FILE_PATH)
+        .unwrap_or_else(Default::default)
+        .map(|plugin| plugin.to_string())
+        .collect::<Vec<String>>();
+
+    for filepath in &file_paths {
+        if let Some(media_type) = matches.value_of(MEDIA_TYPE) {
+            config_cache.set(
+                format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
+                media_type.to_string(),
+            )?;
+        } else {
+            config_cache.set(
+                format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
+                get_mime_type_from_file_extension(filepath.to_string()),
+            )?;
+        }
+    }
+
+    config_cache.set(format!("{}.{}", COMMAND_DATA, FILE_PATH).as_str(), file_paths)?;
+
+    if let Some(sogar_cache) = matches.value_of(REGISTRY_CACHE) {
+        config_cache.set(REGISTRY_CACHE, sogar_cache.to_string())?;
+    }
+
     if matches.is_present(EXPORT_ARTIFACT) {
-        if let Some(namespace) = matches.value_of(REFERENCE) {
-            config_cache.set(format!("{}.{}", EXPORT, REFERENCE).as_str(), namespace.to_string())?;
-        }
+        config_cache.set(COMMAND_TYPE, CommandType::Export)?;
+    }
 
-        if let Some(filepath) = matches.value_of(FILE_PATH) {
-            config_cache.set(format!("{}.{}", EXPORT, FILE_PATH).as_str(), filepath.to_string())?;
-
-            if let Some(media_type) = matches.value_of(MEDIA_TYPE) {
-                config_cache.set(format!("{}.{}", EXPORT, MEDIA_TYPE).as_str(), media_type.to_string())?;
-            } else {
-                config_cache.set(
-                    format!("{}.{}", EXPORT, MEDIA_TYPE).as_str(),
-                    get_mime_type_from_file_extension(filepath.to_string()),
-                )?;
-            }
-        }
+    if matches.is_present(IMPORT_ARTIFACT) {
+        config_cache.set(COMMAND_TYPE, CommandType::Import)?;
     }
 
     Ok(())
@@ -185,6 +230,27 @@ pub fn create_command_line_app<'a, 'b>() -> App<'a, 'b> {
                 .value_name(VALUE_FILE_PATH)
                 .help("Path of the file that will be exported.")
                 .takes_value(true)
+                .empty_values(false)
+                .multiple(true)
+                .use_delimiter(true)
+                .value_delimiter(";")
+                .number_of_values(1),
+        )
+        .arg(
+            Arg::with_name(IMPORT_ARTIFACT)
+                .long(IMPORT_ARTIFACT)
+                .value_name(VALUE_IMPORT_ARTIFACT)
+                .help("Command to import the file to the registry.")
+                .takes_value(false)
+                .requires_all(&[REFERENCE, FILE_PATH]),
+        )
+        .arg(
+            Arg::with_name(REGISTRY_CACHE)
+                .long(REGISTRY_CACHE)
+                .value_name(ENV_REGISTRY_CACHE)
+                .help("Path to the directory where cache will be located.")
+                .takes_value(true)
+                .env(ENV_REGISTRY_CACHE)
                 .empty_values(false),
         )
 }

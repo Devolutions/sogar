@@ -76,7 +76,6 @@ pub enum SogarError {
     ParseError(#[from] ParseError),
 }
 
-const HEAD: &str = "Head";
 const PUT: &str = "Put";
 const POST: &str = "Post";
 
@@ -493,14 +492,12 @@ async fn export_sogar_manifest(
         tag.clone()
     );
 
-    let head_response = client
+    client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
         .header(ACCEPT, media_type)
         .send()
         .await?;
-
-    handle_response(head_response, HEAD, head_url.as_str())?;
 
     let put_url = format!(
         "{}/v2/{}/{}/manifests/{}",

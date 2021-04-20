@@ -4,11 +4,11 @@ use sogar::{
     export_sogar_file_artifact, import_sogar_file_artifact,
     logger::init_logger,
     sogar_config::{create_command_line_app, match_arguments, CommandType, Settings},
-    SogarError,
+    SogarResult,
 };
 
 #[tokio::main]
-async fn main() -> Result<(), SogarError> {
+async fn main() -> SogarResult<()> {
     let logger = init_logger(None);
 
     let app = create_command_line_app();

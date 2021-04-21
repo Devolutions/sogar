@@ -1104,6 +1104,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "config",
+ "dirs-next",
  "regex 0.2.11",
  "reqwest",
  "serde",

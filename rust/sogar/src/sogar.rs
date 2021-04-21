@@ -1,8 +1,10 @@
 use std::{
+    collections::HashMap,
+    fs,
     fs::File,
     io,
-    io::{Error, ErrorKind, Read},
-    path::Path,
+    io::{Error, ErrorKind, Read, Write},
+    path::{Path, PathBuf},
 };
 
 use regex::Regex;
@@ -17,6 +19,7 @@ use thiserror::Error;
 use url::{ParseError, Url};
 
 use crate::sogar_config::Settings;
+use slog_scope::{error, info};
 use tempfile::NamedTempFile;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -25,6 +28,8 @@ pub struct Layer {
     pub media_type: String,
     pub digest: String,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -42,9 +47,21 @@ pub struct Reference {
     pub tag: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct BlobDigest {
+    pub digest_type: String,
+    pub value: String,
+}
+
 pub struct FileInfo {
     pub data: Vec<u8>,
     pub layer: Layer,
+}
+
+struct SogarCache {
+    pub path: PathBuf,
+    pub blob_path: PathBuf,
+    pub manifest_path: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -59,21 +76,44 @@ pub enum SogarError {
     ParseError(#[from] ParseError),
 }
 
-const HEAD: &str = "Head";
 const PUT: &str = "Put";
 const POST: &str = "Post";
 
 const OCTET_STREAM: &str = "application/octet-stream";
+const IMAGE_TITLE: &str = "org.opencontainers.image.title";
 
-pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), SogarError> {
-    if let Some(export) = &settings.export {
-        let push_data = read_file_data(Path::new(export.filepath.as_str()), export.media_type.clone()).await?;
+pub type SogarResult<T> = Result<T, SogarError>;
 
+pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
+    let export = settings.command_data.clone();
+
+    let access_token = get_access_token(&settings).await?;
+    if let Some(reference) = parse_namespace(export.reference.clone()) {
         let mut layers = Vec::new();
-        layers.push(push_data.layer.clone());
+        for filepath in &export.filepath {
+            let push_file_path = Path::new(filepath.as_str());
+
+            let file_name = push_file_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default()
+                .to_string();
+
+            let mut annotations_map = HashMap::new();
+            annotations_map.insert(String::from(IMAGE_TITLE), file_name);
+            let push_data = read_file_data(push_file_path, export.media_type.clone(), Some(annotations_map)).await?;
+            layers.push(push_data.layer.clone());
+            export_sogar_blob(&settings, access_token.clone(), reference.clone(), push_data).await?;
+        }
 
         let config_file = NamedTempFile::new()?;
-        let config_data = read_file_data(config_file.path(), String::from("application/json")).await?;
+        let config_data = read_file_data(
+            config_file.path(),
+            String::from("application/vnd.oci.image.config.v1+json"),
+            None,
+        )
+        .await?;
 
         let manifest = Manifest {
             schema_version: 2,
@@ -83,17 +123,125 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> Result<(), Sogar
 
         let manifest_file = create_file_info(manifest).await?;
 
-        let access_token = get_access_token(&settings).await?;
-        if let Some(reference) = parse_namespace(&settings) {
-            export_sogar_blob(&settings, access_token.clone(), reference.clone(), push_data).await?;
+        export_sogar_blob(&settings, access_token.clone(), reference.clone(), config_data).await?;
 
-            export_sogar_blob(&settings, access_token.clone(), reference.clone(), config_data).await?;
+        export_sogar_manifest(&settings, access_token, reference, manifest_file).await?;
+    }
 
-            export_sogar_manifest(&settings, access_token, reference, manifest_file).await?;
+    Ok(())
+}
+
+pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
+    let import = settings.command_data.clone();
+    let access_token = get_access_token(&settings).await?;
+
+    let sogar_cache = create_sogar_cache(settings.registry_cache.clone()).await?;
+
+    if let Some(reference) = parse_namespace(import.reference.clone()) {
+        let manifest = get_sogar_manifest(&settings, access_token.clone(), reference.clone(), &sogar_cache).await?;
+        let out_file_path = import.filepath.clone();
+        if out_file_path.is_empty() {
+            return Err(str_to_sogar_error("The paths are empty!"));
+        }
+
+        save_sogar_blob(
+            &settings,
+            access_token.clone(),
+            reference.clone(),
+            manifest.config.clone(),
+            &sogar_cache,
+        )
+        .await?;
+
+        let mut blob_path = PathBuf::new();
+        for (count, blob) in manifest.layers.iter().enumerate() {
+            let from_path = save_sogar_blob(
+                &settings,
+                access_token.clone(),
+                reference.clone(),
+                blob.clone(),
+                &sogar_cache,
+            )
+            .await?;
+
+            if count < out_file_path.len() {
+                blob_path = PathBuf::from(out_file_path.get(count).unwrap_or(&"".to_string()));
+            }
+
+            let new_path_buf = if blob_path.is_dir() {
+                let mut path_buf = create_file_name_from_layer(&blob, blob_path.as_path());
+                if path_buf.exists() {
+                    path_buf = update_file_name(path_buf.as_path(), count + 1);
+                }
+                path_buf
+            } else if blob_path.exists() {
+                update_file_name(blob_path.as_path(), count + 1)
+            } else {
+                PathBuf::from(blob_path.to_str().unwrap_or_default())
+            };
+
+            fs::copy(from_path, new_path_buf)?;
         }
     }
 
     Ok(())
+}
+
+async fn create_sogar_cache(path: Option<String>) -> SogarResult<SogarCache> {
+    let path_buff = match path {
+        Some(cache_dir) => PathBuf::from(cache_dir),
+        None => {
+            let home_path = dirs_next::home_dir().unwrap_or_default();
+            home_path.join(".sogar")
+        }
+    };
+
+    let cache = SogarCache {
+        blob_path: path_buff.join("blobs"),
+        manifest_path: path_buff.join("manifests"),
+        path: path_buff,
+    };
+
+    if !cache.path.exists() {
+        fs::create_dir_all(cache.path.as_path())?
+    }
+
+    if !cache.blob_path.exists() {
+        fs::create_dir_all(cache.blob_path.as_path())?
+    }
+
+    if !cache.manifest_path.exists() {
+        fs::create_dir_all(cache.manifest_path.as_path())?
+    }
+
+    Ok(cache)
+}
+
+fn create_file_name_from_layer(layer: &Layer, path: &Path) -> PathBuf {
+    let digest_part_option = parse_digest(layer.digest.clone());
+    let name = match &layer.annotations {
+        Some(annotations) if !annotations.is_empty() && annotations.contains_key(IMAGE_TITLE) => {
+            annotations.get(IMAGE_TITLE).unwrap_or(&"".to_string()).to_string()
+        }
+        _ => digest_part_option.map_or("".to_string(), |digest_part| digest_part.value),
+    };
+
+    path.join(name)
+}
+
+fn update_file_name(path: &Path, index: usize) -> PathBuf {
+    let old_path = path.to_str().unwrap_or_default();
+    let old_name = path.file_stem().unwrap_or_default().to_str().unwrap_or_default();
+    let new_path = old_path.replace(old_name, format!("{}-{}", old_name, index).as_str());
+    let mut new_path_buff = PathBuf::from(new_path);
+
+    let mut update_index = 1;
+    while new_path_buff.exists() {
+        new_path_buff = update_file_name(path, index + update_index);
+        update_index += 1;
+    }
+
+    new_path_buff
 }
 
 async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
@@ -106,11 +254,16 @@ async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
             media_type: String::from("application/vnd.oci.image.manifest.v1+json"),
             digest: String::new(),
             size: manifest_bytes.len() as u64,
+            annotations: None,
         },
     })
 }
 
-async fn read_file_data(file_path: &Path, media_type: String) -> io::Result<FileInfo> {
+async fn read_file_data(
+    file_path: &Path,
+    media_type: String,
+    annotations: Option<HashMap<String, String>>,
+) -> io::Result<FileInfo> {
     let mut file = File::open(file_path)?;
     let file_size = file.metadata()?.len();
 
@@ -128,12 +281,13 @@ async fn read_file_data(file_path: &Path, media_type: String) -> io::Result<File
         media_type,
         digest: artifact_digest,
         size: file_size,
+        annotations,
     };
 
     Ok(FileInfo { data, layer })
 }
 
-async fn get_access_token(settings: &Settings) -> Result<String, SogarError> {
+async fn get_access_token(settings: &Settings) -> SogarResult<String> {
     #[derive(Serialize, Deserialize, Debug)]
     pub struct AccessToken {
         client_id: String,
@@ -144,7 +298,7 @@ async fn get_access_token(settings: &Settings) -> Result<String, SogarError> {
         service: String,
     }
 
-    if let Some(reference) = parse_namespace(settings) {
+    if let Some(reference) = parse_namespace(settings.command_data.reference.clone()) {
         let scope = format!(
             "repository:{}/{}:pull repository:{}/{}:pull,push",
             reference.repository, reference.name, reference.repository, reference.name
@@ -189,17 +343,8 @@ async fn export_sogar_blob(
     access_token: String,
     reference: Reference,
     file_info: FileInfo,
-) -> Result<(), SogarError> {
+) -> SogarResult<()> {
     let client = Client::new();
-
-    let export = settings.export.as_ref();
-    if export.is_none() {
-        return Err(str_to_sogar_error("Export struct is empty"));
-    }
-
-    let export = export.unwrap();
-
-    let media_type = export.media_type.clone();
 
     let head_url = format!(
         "{}/v2/{}/{}/blobs/{}",
@@ -212,11 +357,17 @@ async fn export_sogar_blob(
     let head_response = client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
-        .header(ACCEPT, media_type)
+        .header(ACCEPT, file_info.layer.media_type.clone())
         .send()
         .await?;
 
-    handle_response(head_response, HEAD, head_url.as_str())?;
+    if head_response.status() == 200 {
+        info!(
+            "Blob {} already found in registry, skipping push",
+            file_info.layer.digest
+        );
+        return Ok(());
+    }
 
     let post_url = format!(
         "{}/v2/{}/{}/blobs/uploads/",
@@ -228,7 +379,7 @@ async fn export_sogar_blob(
     let post_response = client
         .post(post_url.as_str())
         .bearer_auth(access_token.clone())
-        .header(CONTENT_LENGTH, 0 as u64)
+        .header(CONTENT_LENGTH, 0_u64)
         .header(CONTENT_TYPE, OCTET_STREAM)
         .send()
         .await?;
@@ -266,12 +417,65 @@ async fn export_sogar_blob(
     Ok(())
 }
 
+async fn save_sogar_blob(
+    settings: &Settings,
+    access_token: String,
+    reference: Reference,
+    layer: Layer,
+    sogar_cache: &SogarCache,
+) -> SogarResult<PathBuf> {
+    let client = Client::new();
+    let blob_digest = parse_digest(layer.digest.clone());
+    if blob_digest.is_none() {
+        return Err(str_to_sogar_error(
+            format!("Failed to parse digest {:?}", blob_digest).as_str(),
+        ));
+    }
+
+    let blob_digest = blob_digest.unwrap();
+
+    let path = sogar_cache.blob_path.join(blob_digest.digest_type.clone());
+    if !path.exists() {
+        fs::create_dir_all(path.as_path())?
+    }
+
+    let output_blob = path.join(blob_digest.value.clone());
+    if output_blob.exists() {
+        info!("Blob {} already found in local cache, skipping pull", blob_digest.value);
+        return Ok(output_blob);
+    }
+
+    let accept_list = format!("{},{}", layer.media_type.as_str(), "*/*");
+
+    let get_url = format!(
+        "{}/v2/{}/{}/blobs/{}",
+        settings.registry_url.clone(),
+        reference.repository.clone(),
+        reference.name.clone(),
+        layer.digest.clone()
+    );
+
+    let get_response = client
+        .get(get_url.as_str())
+        .bearer_auth(access_token.clone())
+        .header(ACCEPT, accept_list)
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    let mut file = File::create(output_blob.as_path())?;
+    file.write_all(get_response.as_ref())?;
+
+    Ok(output_blob)
+}
+
 async fn export_sogar_manifest(
     settings: &Settings,
     access_token: String,
     reference: Reference,
     file_info: FileInfo,
-) -> Result<(), SogarError> {
+) -> SogarResult<()> {
     let client = Client::new();
     let media_type = file_info.layer.media_type.as_str();
 
@@ -288,14 +492,12 @@ async fn export_sogar_manifest(
         tag.clone()
     );
 
-    let head_response = client
+    client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
         .header(ACCEPT, media_type)
         .send()
         .await?;
-
-    handle_response(head_response, HEAD, head_url.as_str())?;
 
     let put_url = format!(
         "{}/v2/{}/{}/manifests/{}",
@@ -319,7 +521,60 @@ async fn export_sogar_manifest(
     Ok(())
 }
 
-fn handle_response(response: Response, request_type: &str, url: &str) -> Result<Response, SogarError> {
+async fn get_sogar_manifest(
+    settings: &Settings,
+    access_token: String,
+    reference: Reference,
+    sogar_cache: &SogarCache,
+) -> SogarResult<Manifest> {
+    let client = Client::new();
+    let accept_list = format!(
+        "{},{},{},{},{}",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.oci.image.index.v1+json",
+        "*/*"
+    );
+
+    let tag = match reference.tag {
+        Some(tag) => tag,
+        None => String::from("null"),
+    };
+
+    let get_url = format!(
+        "{}/v2/{}/{}/manifests/{}",
+        settings.registry_url.clone(),
+        reference.repository.clone(),
+        reference.name.clone(),
+        tag.clone()
+    );
+
+    let get_response = client
+        .get(get_url.as_str())
+        .bearer_auth(access_token.clone())
+        .header(ACCEPT, accept_list)
+        .send()
+        .await?
+        .json::<Manifest>()
+        .await?;
+
+    let manifest_path = sogar_cache
+        .manifest_path
+        .join(reference.repository)
+        .join(reference.name);
+
+    if !manifest_path.exists() {
+        fs::create_dir_all(manifest_path.as_path())?
+    }
+
+    let mut file = File::create(manifest_path.join(tag).as_path())?;
+    file.write_all(serde_json::to_string(&get_response).unwrap_or_default().as_bytes())?;
+
+    Ok(get_response)
+}
+
+fn handle_response(response: Response, request_type: &str, url: &str) -> SogarResult<Response> {
     if !response.status().is_success() {
         Err(str_to_sogar_error(
             format!(
@@ -339,65 +594,68 @@ fn str_to_sogar_error(error: &str) -> SogarError {
     SogarError::IoError(Error::new(ErrorKind::InvalidData, error))
 }
 
-fn parse_namespace(settings: &Settings) -> Option<Reference> {
-    if let Some(export) = &settings.export {
-        let reference = export.reference.clone();
-        let reference_tag = Regex::new(r"(.*)/(.*):(.*)").unwrap();
-        let reference_no_tag = Regex::new(r"(.*)/(.*)").unwrap();
+fn parse_namespace(reference: String) -> Option<Reference> {
+    let reference_tag = Regex::new(r"(.*)/(.*):(.*)").unwrap();
+    let reference_no_tag = Regex::new(r"(.*)/(.*)").unwrap();
 
-        let split_value = if reference_tag.is_match(export.reference.as_str()) {
-            Some(vec!['/', ':'])
-        } else if reference_no_tag.is_match(export.reference.as_str()) {
-            Some(vec!['/'])
+    let split_value = if reference_tag.is_match(reference.as_str()) {
+        Some(vec!['/', ':'])
+    } else if reference_no_tag.is_match(reference.as_str()) {
+        Some(vec!['/'])
+    } else {
+        None
+    };
+
+    if let Some(value) = split_value {
+        let repository_index = 0;
+        let name_index = 1;
+        let tag_index = 2;
+        let max_items_size = 3;
+
+        let split = reference.split(value.as_slice());
+        let items = split.into_iter().map(ToString::to_string).collect::<Vec<String>>();
+
+        let tag = if items.len() == max_items_size {
+            Some(items[tag_index].clone())
         } else {
             None
         };
 
-        if let Some(value) = split_value {
-            let repository_index = 0;
-            let name_index = 1;
-            let tag_index = 2;
-            let max_items_size = 3;
-
-            let split = reference.split(value.as_slice());
-            let items = split.into_iter().map(ToString::to_string).collect::<Vec<String>>();
-
-            let tag = if items.len() == max_items_size {
-                Some(items[tag_index].clone())
-            } else {
-                None
-            };
-
-            return Some(Reference {
-                repository: items[repository_index].clone(),
-                name: items[name_index].clone(),
-                tag,
-            });
-        }
+        return Some(Reference {
+            repository: items[repository_index].clone(),
+            name: items[name_index].clone(),
+            tag,
+        });
     }
 
     None
 }
 
+fn parse_digest(blobs_digest: String) -> Option<BlobDigest> {
+    let digest_type = 0;
+    let value = 1;
+    let max_items_size = 2;
+
+    let split = blobs_digest.split(':');
+    let items = split.into_iter().map(ToString::to_string).collect::<Vec<String>>();
+
+    if items.len() != max_items_size {
+        None
+    } else {
+        Some(BlobDigest {
+            digest_type: items[digest_type].clone(),
+            value: items[value].clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::r#mod::sogar_config::Export;
 
     #[test]
     fn test_reference_with_tag() {
-        let settings = Settings {
-            registry_url: String::new(),
-            username: String::new(),
-            password: String::new(),
-            export: Some(Export {
-                media_type: String::new(),
-                reference: String::from("videos/demo:latest"),
-                filepath: String::new(),
-            }),
-        };
-
-        let reference = parse_namespace(&settings);
+        let reference = parse_namespace(String::from("videos/demo:latest"));
         assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
@@ -408,18 +666,7 @@ mod tests {
 
     #[test]
     fn test_reference_no_tag() {
-        let settings = Settings {
-            registry_url: String::new(),
-            username: String::new(),
-            password: String::new(),
-            export: Some(Export {
-                media_type: String::new(),
-                reference: String::from("videos/demo"),
-                filepath: String::new(),
-            }),
-        };
-
-        let reference = parse_namespace(&settings);
+        let reference = parse_namespace(String::from("videos/demo"));
         assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
@@ -429,18 +676,61 @@ mod tests {
 
     #[test]
     fn test_incorrect_reference() {
-        let settings = Settings {
-            registry_url: String::new(),
-            username: String::new(),
-            password: String::new(),
-            export: Some(Export {
-                media_type: String::new(),
-                reference: String::from("videos"),
-                filepath: String::new(),
-            }),
+        let reference = parse_namespace(String::from("videos"));
+        assert_eq!(reference.is_none(), true);
+    }
+
+    #[test]
+    fn test_correct_digest() {
+        let blob_digest = parse_digest(String::from(
+            "sha256:0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8",
+        ));
+        assert_eq!(blob_digest.is_some(), true);
+        let blob_digest = blob_digest.unwrap();
+        assert_eq!(blob_digest.digest_type, String::from("sha256"));
+        assert_eq!(
+            blob_digest.value,
+            String::from("0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8")
+        );
+    }
+
+    #[test]
+    fn test_incorrect_digest() {
+        let blob_digest = parse_digest(String::from("sha256"));
+        assert_eq!(blob_digest.is_none(), true);
+    }
+
+    #[test]
+    fn create_file_name_from_layer_created_from_digest() {
+        let hash = "0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8";
+        let path = Path::new("test");
+        let layer = Layer {
+            media_type: "".to_string(),
+            digest: format!("sha256:{}", hash),
+            size: 0,
+            annotations: None,
         };
 
-        let reference = parse_namespace(&settings);
-        assert_eq!(reference.is_none(), true);
+        let result = create_file_name_from_layer(&layer, path);
+        assert_eq!(result, PathBuf::from(format!("test/{}", hash)));
+    }
+
+    #[test]
+    fn create_file_name_from_layer_created_from_annotation() {
+        let hash = "0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8";
+        let filename = String::from("file1");
+        let mut annotations = HashMap::new();
+        annotations.insert(String::from(IMAGE_TITLE), filename.clone());
+
+        let path = Path::new("test");
+        let layer = Layer {
+            media_type: "".to_string(),
+            digest: format!("sha256:{}", hash),
+            size: 0,
+            annotations: Some(annotations),
+        };
+
+        let result = create_file_name_from_layer(&layer, path);
+        assert_eq!(result, PathBuf::from(format!("test/{}", filename)));
     }
 }

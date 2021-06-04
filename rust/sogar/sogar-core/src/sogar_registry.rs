@@ -4,7 +4,7 @@ use regex::Regex;
 use saphir::{hyper::body::Buf, prelude::*};
 use serde::Deserialize;
 use slog_scope::{debug, error};
-use std::{collections::HashMap, io, io::Write, path::Path};
+use std::{collections::HashMap, io, io::Write, path::Path, fs::create_dir_all};
 use tokio_02::io::AsyncWriteExt;
 
 const REPOSITORY: &str = "repository";
@@ -75,9 +75,8 @@ pub struct SogarController;
 
 impl SogarController {
     pub fn new(registry: &str, image_name: &str) -> Self {
-        let path = Path::new(registry);
-        let path = path.join(image_name);
-        if let Err(e) = std::fs::create_dir_all(path.join(ARTIFACTS_DIR)) {
+        let path = Path::new(registry).join(image_name);
+        if let Err(e) = create_dir_all(path.join(ARTIFACTS_DIR)) {
             error!("Failed to create registry! {}", e);
         }
 
@@ -116,6 +115,7 @@ impl SogarController {
                     .join(ARTIFACTS_DIR)
                     .join(&digest.digest_type)
                     .join(&digest.value);
+
                 if path.exists() {
                     let mut response = SogarCustomResponse::new(StatusCode::OK);
                     response.header(
@@ -163,7 +163,7 @@ impl SogarController {
                 if let Some(blob_digest) = parse_digest(digest.clone()) {
                     let path = path.join(blob_digest.digest_type.as_str());
                     if !path.exists() {
-                        if let Err(e) = std::fs::create_dir_all(path.as_path()) {
+                        if let Err(e) = create_dir_all(path.as_path()) {
                             error!("Failed to create directory for saving blob {}", e);
                             return SogarCustomResponse::new(StatusCode::BAD_REQUEST);
                         }
@@ -185,6 +185,7 @@ impl SogarController {
                         "Location",
                         format!("/v2/{}/{}/blobs/{}", repository, image_name, digest).as_str(),
                     );
+
                     return response;
                 }
             }
@@ -241,6 +242,7 @@ impl SogarController {
                         .get(CONTENT_TYPE_HEADER)
                         .and_then(|header| header.to_str().map_or(None, |result| Some(result.to_string())));
                 }
+
                 add_artifacts_info(tag.clone(), manifest_mime_type, image_path.as_path());
 
                 let mut response = SogarCustomResponse::new(StatusCode::CREATED);
@@ -248,9 +250,11 @@ impl SogarController {
                     "Location",
                     format!("/v2/{}/{}/manifests/{}", repository, image_name, tag).as_str(),
                 );
+
                 return response;
             }
         }
+
         SogarCustomResponse::new(StatusCode::BAD_REQUEST)
     }
 
@@ -266,6 +270,7 @@ impl SogarController {
             let image_path = Path::new(repository).join(image_name);
             let path = image_path.join(ARTIFACTS_DIR).join(tag);
             let content_type = read_artifact_info(tag.to_string(), image_path.as_path());
+
             if headers.contains_key(ACCEPT_HEADER) {
                 if let (Some(accept_value), Some(content_type)) = (
                     headers
@@ -311,6 +316,7 @@ impl SogarController {
                     if let Some(content_type) = content_type {
                         response.header(CONTENT_TYPE_HEADER, content_type.as_str());
                     }
+
                     return response;
                 }
             }
@@ -342,6 +348,7 @@ async fn write_body_to_file(mut body: hyper::Body, path: &Path) -> io::Result<()
     }
 
     file.flush().await?;
+
     Ok(())
 }
 
@@ -395,10 +402,10 @@ pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image
             return;
         }
 
-        let manifest: Manifest = json.unwrap();
         use std::fs::OpenOptions;
-
         let artifacts_content_file = OpenOptions::new().write(true).append(true).open(content_path);
+
+        let manifest: Manifest = json.unwrap();
 
         if let Ok(mut file) = artifacts_content_file {
             for layer in manifest.layers {
@@ -424,8 +431,8 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
     let file = File::open(content_path);
 
     #[derive(Deserialize)]
-    struct BlobsData {
-        blobs: HashMap<String, String>,
+    struct ArtifactsData {
+        artifacts: HashMap<String, String>,
     }
 
     if let Ok(file) = file {
@@ -435,9 +442,9 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
             return None;
         }
 
-        let blobs_data: BlobsData = yaml.unwrap();
-        if blobs_data.blobs.contains_key(digest_value.as_str()) {
-            if let Some(mime_type) = blobs_data.blobs.get(digest_value.as_str()) {
+        let blobs_data: ArtifactsData = yaml.unwrap();
+        if blobs_data.artifacts.contains_key(digest_value.as_str()) {
+            if let Some(mime_type) = blobs_data.artifacts.get(digest_value.as_str()) {
                 return Some(mime_type.to_string());
             }
         }

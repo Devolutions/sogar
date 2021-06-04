@@ -119,7 +119,7 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
     Ok(())
 }
 
-fn get_mime_type_from_file_extension(file_name: String) -> String {
+pub fn get_mime_type_from_file_extension(file_name: String) -> String {
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
 
     let mut mime_mapping = HashMap::with_capacity(32);

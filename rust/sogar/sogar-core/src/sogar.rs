@@ -1,9 +1,7 @@
 use std::{
     collections::HashMap,
-    fs,
-    fs::File,
-    io,
-    io::{Error, ErrorKind, Read, Write},
+    fs, io,
+    io::{Error, ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -11,7 +9,7 @@ use regex::Regex;
 use reqwest::{
     header::ToStrError,
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
-    Client, Response,
+    Body, Client, Response,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,8 +17,10 @@ use thiserror::Error;
 use url::{ParseError, Url};
 
 use crate::sogar_config::Settings;
-use slog_scope::{error, info};
+use futures::StreamExt;
+use slog_scope::{debug, error, info};
 use tempfile::NamedTempFile;
+use tokio::{fs::File, io::AsyncWriteExt};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -48,13 +48,13 @@ pub struct Reference {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct BlobDigest {
+pub struct BlobDigest {
     pub digest_type: String,
     pub value: String,
 }
 
 pub struct FileInfo {
-    pub data: Vec<u8>,
+    pub path: PathBuf,
     pub layer: Layer,
 }
 
@@ -62,6 +62,16 @@ struct SogarCache {
     pub path: PathBuf,
     pub blob_path: PathBuf,
     pub manifest_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AccessToken {
+    pub client_id: String,
+    pub grant_type: String,
+    pub username: String,
+    pub password: String,
+    pub scope: String,
+    pub service: String,
 }
 
 #[derive(Debug, Error)]
@@ -85,6 +95,7 @@ const IMAGE_TITLE: &str = "org.opencontainers.image.title";
 pub type SogarResult<T> = Result<T, SogarError>;
 
 pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
+    slog_scope::info!("settings are: {:?}", settings);
     let export = settings.command_data.clone();
 
     let access_token = get_access_token(&settings).await?;
@@ -93,45 +104,34 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
         for filepath in &export.filepath {
             let push_file_path = Path::new(filepath.as_str());
 
-            let file_name = push_file_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default()
-                .to_string();
+            let annotations_map = create_annotation_for_filename(push_file_path);
 
-            let mut annotations_map = HashMap::new();
-            annotations_map.insert(String::from(IMAGE_TITLE), file_name);
-            let push_data = read_file_data(push_file_path, export.media_type.clone(), Some(annotations_map)).await?;
+            let push_data = read_file_data(push_file_path, export.media_type.clone(), Some(annotations_map))?;
             layers.push(push_data.layer.clone());
             export_sogar_blob(&settings, access_token.clone(), reference.clone(), push_data).await?;
         }
 
-        let config_file = NamedTempFile::new()?;
-        let config_data = read_file_data(
-            config_file.path(),
-            String::from("application/vnd.oci.image.config.v1+json"),
-            None,
-        )
-        .await?;
+        let config_data = create_config()?;
 
+        let manifest_file = NamedTempFile::new()?;
         let manifest = Manifest {
             schema_version: 2,
             config: config_data.layer.clone(),
             layers,
         };
 
-        let manifest_file = create_file_info(manifest).await?;
+        let manifest_file_info = create_file_info(manifest, manifest_file.path())?;
 
         export_sogar_blob(&settings, access_token.clone(), reference.clone(), config_data).await?;
 
-        export_sogar_manifest(&settings, access_token, reference, manifest_file).await?;
+        export_sogar_manifest(&settings, access_token, reference, manifest_file_info).await?;
     }
 
     Ok(())
 }
 
 pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> {
+    slog_scope::info!("settings are: {:?}", settings);
     let import = settings.command_data.clone();
     let access_token = get_access_token(&settings).await?;
 
@@ -217,6 +217,15 @@ async fn create_sogar_cache(path: Option<String>) -> SogarResult<SogarCache> {
     Ok(cache)
 }
 
+pub fn create_config() -> io::Result<FileInfo> {
+    let config_file = NamedTempFile::new()?;
+    read_file_data(
+        config_file.path(),
+        String::from("application/vnd.oci.image.config.v1+json"),
+        None,
+    )
+}
+
 fn create_file_name_from_layer(layer: &Layer, path: &Path) -> PathBuf {
     let digest_part_option = parse_digest(layer.digest.clone());
     let name = match &layer.annotations {
@@ -244,12 +253,18 @@ fn update_file_name(path: &Path, index: usize) -> PathBuf {
     new_path_buff
 }
 
-async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
+pub fn create_file_info(manifest: Manifest, file_path: &Path) -> io::Result<FileInfo> {
+    use std::fs::File;
     let manifest_json = ::serde_json::to_string(&manifest)?;
     let manifest_bytes = manifest_json.as_bytes();
 
+    let mut manifest_file = File::create(file_path)?;
+    manifest_file.write_all(manifest_bytes)?;
+
+    let path = PathBuf::from(file_path.to_str().unwrap_or_default().to_string());
+
     Ok(FileInfo {
-        data: manifest_bytes.to_vec(),
+        path,
         layer: Layer {
             media_type: String::from("application/vnd.oci.image.manifest.v1+json"),
             digest: String::new(),
@@ -259,19 +274,18 @@ async fn create_file_info(manifest: Manifest) -> io::Result<FileInfo> {
     })
 }
 
-async fn read_file_data(
+pub fn read_file_data(
     file_path: &Path,
     media_type: String,
     annotations: Option<HashMap<String, String>>,
 ) -> io::Result<FileInfo> {
+    use std::fs::File;
     let mut file = File::open(file_path)?;
     let file_size = file.metadata()?.len();
 
     let mut hasher = Sha256::new();
-    let mut data = Vec::new();
 
-    file.read_to_end(&mut data)?;
-    hasher.input(data.as_slice());
+    io::copy(&mut file, &mut hasher)?;
 
     let artifact_digest_hash_type = "sha256";
     let artifact_digest_value = format!("{:x}", hasher.result()).to_lowercase();
@@ -284,20 +298,12 @@ async fn read_file_data(
         annotations,
     };
 
-    Ok(FileInfo { data, layer })
+    let path = PathBuf::from(file_path.to_str().unwrap_or_default().to_string());
+
+    Ok(FileInfo { path, layer })
 }
 
 async fn get_access_token(settings: &Settings) -> SogarResult<String> {
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct AccessToken {
-        client_id: String,
-        grant_type: String,
-        username: String,
-        password: String,
-        scope: String,
-        service: String,
-    }
-
     if let Some(reference) = parse_namespace(settings.command_data.reference.clone()) {
         let scope = format!(
             "repository:{}/{}:pull repository:{}/{}:pull,push",
@@ -394,20 +400,24 @@ async fn export_sogar_blob(
         }
 
         let location = location_header.unwrap().to_str()?;
+        let digest_separator = if location.contains('?') { "&" } else { "?" };
 
         let put_url = format!(
-            "{}{}&digest={}",
+            "{}{}{}digest={}",
             settings.registry_url.clone(),
             location,
+            digest_separator,
             file_info.layer.digest.clone()
         );
 
+        let file = File::open(&file_info.path).await?;
+        let body = file_to_body(file);
         let put_response = client
             .put(put_url.as_str())
             .bearer_auth(access_token)
             .header(CONTENT_LENGTH, file_info.layer.size)
             .header(CONTENT_TYPE, OCTET_STREAM)
-            .body(file_info.data)
+            .body(body)
             .send()
             .await?;
 
@@ -415,6 +425,13 @@ async fn export_sogar_blob(
     }
 
     Ok(())
+}
+
+fn file_to_body(file: File) -> Body {
+    use tokio_util::codec::{BytesCodec, FramedRead};
+
+    let stream = FramedRead::new(file, BytesCodec::new());
+    Body::wrap_stream(stream)
 }
 
 async fn save_sogar_blob(
@@ -460,12 +477,14 @@ async fn save_sogar_blob(
         .bearer_auth(access_token.clone())
         .header(ACCEPT, accept_list)
         .send()
-        .await?
-        .bytes()
         .await?;
 
-    let mut file = File::create(output_blob.as_path())?;
-    file.write_all(get_response.as_ref())?;
+    let mut file = File::create(output_blob.as_path()).await?;
+
+    let mut bytes_stream = get_response.bytes_stream();
+    while let Some(item) = bytes_stream.next().await {
+        file.write_all(&item.unwrap()).await?;
+    }
 
     Ok(output_blob)
 }
@@ -492,12 +511,14 @@ async fn export_sogar_manifest(
         tag.clone()
     );
 
-    client
+    let result = client
         .head(head_url.as_str())
         .bearer_auth(access_token.clone())
         .header(ACCEPT, media_type)
         .send()
-        .await?;
+        .await;
+
+    debug!("head request for manifest {:?}", result);
 
     let put_url = format!(
         "{}/v2/{}/{}/manifests/{}",
@@ -507,12 +528,14 @@ async fn export_sogar_manifest(
         tag.clone()
     );
 
+    let file = File::open(&file_info.path).await?;
+    let body = file_to_body(file);
     let put_response = client
         .put(put_url.as_str())
         .bearer_auth(access_token)
         .header(CONTENT_TYPE, media_type)
         .header(CONTENT_LENGTH, file_info.layer.size)
-        .body(file_info.data)
+        .body(body)
         .send()
         .await?;
 
@@ -568,8 +591,9 @@ async fn get_sogar_manifest(
         fs::create_dir_all(manifest_path.as_path())?
     }
 
-    let mut file = File::create(manifest_path.join(tag).as_path())?;
-    file.write_all(serde_json::to_string(&get_response).unwrap_or_default().as_bytes())?;
+    let mut file = File::create(manifest_path.join(tag).as_path()).await?;
+    file.write_all(serde_json::to_string(&get_response).unwrap_or_default().as_bytes())
+        .await?;
 
     Ok(get_response)
 }
@@ -631,7 +655,7 @@ fn parse_namespace(reference: String) -> Option<Reference> {
     None
 }
 
-fn parse_digest(blobs_digest: String) -> Option<BlobDigest> {
+pub fn parse_digest(blobs_digest: String) -> Option<BlobDigest> {
     let digest_type = 0;
     let value = 1;
     let max_items_size = 2;
@@ -647,6 +671,19 @@ fn parse_digest(blobs_digest: String) -> Option<BlobDigest> {
             value: items[value].clone(),
         })
     }
+}
+
+pub fn create_annotation_for_filename(push_file_path: &Path) -> HashMap<String, String> {
+    let file_name = push_file_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
+        .to_string();
+
+    let mut annotations_map = HashMap::new();
+    annotations_map.insert(String::from(IMAGE_TITLE), file_name);
+    annotations_map
 }
 
 #[cfg(test)]

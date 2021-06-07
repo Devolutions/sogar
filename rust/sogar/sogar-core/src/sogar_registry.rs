@@ -4,7 +4,7 @@ use regex::Regex;
 use saphir::{hyper::body::Buf, prelude::*};
 use serde::Deserialize;
 use slog_scope::{debug, error};
-use std::{collections::HashMap, io, io::Write, path::Path, fs::create_dir_all};
+use std::{collections::HashMap, fs::create_dir_all, io, io::Write, path::Path};
 use tokio_02::io::AsyncWriteExt;
 
 const REPOSITORY: &str = "repository";
@@ -75,12 +75,13 @@ pub struct SogarController;
 
 impl SogarController {
     pub fn new(registry: &str, image_name: &str) -> Self {
+        use std::fs::File;
+
         let path = Path::new(registry).join(image_name);
         if let Err(e) = create_dir_all(path.join(ARTIFACTS_DIR)) {
             error!("Failed to create registry! {}", e);
         }
 
-        use std::fs::File;
         let content = path.join(ARTIFACTS_CONTENT);
         if !content.exists() {
             match File::create(path.join(ARTIFACTS_CONTENT)) {
@@ -190,6 +191,7 @@ impl SogarController {
                 }
             }
         }
+
         SogarCustomResponse::new(StatusCode::NOT_FOUND)
     }
 
@@ -273,9 +275,7 @@ impl SogarController {
 
             if headers.contains_key(ACCEPT_HEADER) {
                 if let (Some(accept_value), Some(content_type)) = (
-                    headers
-                        .get(ACCEPT_HEADER)
-                        .and_then(|header| header.to_str().ok()),
+                    headers.get(ACCEPT_HEADER).and_then(|header| header.to_str().ok()),
                     content_type,
                 ) {
                     if accept_value.contains(&content_type) || accept_value.contains("*/*") {
@@ -389,10 +389,12 @@ async fn get_file_if_exists(path: &Path) -> (StatusCode, Option<File>) {
 }
 
 pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image_path: &Path) {
+    use std::fs::File;
+    use std::fs::OpenOptions;
+
     let content_path = image_path.join(ARTIFACTS_CONTENT);
     let filepath = image_path.join(ARTIFACTS_DIR).join(&filename);
 
-    use std::fs::File;
     let file = File::open(filepath);
 
     if let Ok(file) = file {
@@ -402,7 +404,6 @@ pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image
             return;
         }
 
-        use std::fs::OpenOptions;
         let artifacts_content_file = OpenOptions::new().write(true).append(true).open(content_path);
 
         let manifest: Manifest = json.unwrap();
@@ -426,8 +427,9 @@ pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image
 }
 
 fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String> {
-    let content_path = image_path.join(ARTIFACTS_CONTENT);
     use std::fs::File;
+
+    let content_path = image_path.join(ARTIFACTS_CONTENT);
     let file = File::open(content_path);
 
     #[derive(Deserialize)]
@@ -444,9 +446,10 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
 
         let blobs_data: ArtifactsData = yaml.unwrap();
         if blobs_data.artifacts.contains_key(digest_value.as_str()) {
-            if let Some(mime_type) = blobs_data.artifacts.get(digest_value.as_str()) {
-                return Some(mime_type.to_string());
-            }
+            return blobs_data
+                .artifacts
+                .get(digest_value.as_str())
+                .map(|mime_type| mime_type.to_string());
         }
     }
 

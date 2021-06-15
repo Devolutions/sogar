@@ -1,7 +1,7 @@
+pub mod config;
 pub mod logger;
+pub mod registry;
 mod sogar;
-pub mod sogar_config;
-pub mod sogar_registry;
 
 pub use sogar::create_annotation_for_filename;
 pub use sogar::create_config;

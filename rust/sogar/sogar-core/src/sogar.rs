@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::{ParseError, Url};
 
-use crate::sogar_config::Settings;
+use crate::config::Settings;
 use futures::StreamExt;
 use slog_scope::{debug, error, info};
 use tempfile::NamedTempFile;

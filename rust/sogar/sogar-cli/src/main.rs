@@ -1,9 +1,9 @@
 use config::Config as ConfigCache;
 use slog_scope_futures::FutureExt;
 use sogar_core::{
+    config::{create_command_line_app, match_arguments, CommandType, Settings},
     export_sogar_file_artifact, import_sogar_file_artifact,
     logger::init_logger,
-    sogar_config::{create_command_line_app, match_arguments, CommandType, Settings},
     SogarResult,
 };
 

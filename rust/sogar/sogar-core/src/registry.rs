@@ -71,7 +71,9 @@ impl Responder for SogarCustomResponse {
     }
 }
 
-pub struct SogarController;
+pub struct SogarController {
+    _priv: (),
+}
 
 impl SogarController {
     pub fn new(registry: &str, image_name: &str) -> Self {
@@ -96,7 +98,7 @@ impl SogarController {
             }
         }
 
-        Self {}
+        Self { _priv: () }
     }
 }
 

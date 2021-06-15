@@ -1,7 +1,7 @@
 use clap::{crate_name, crate_version, App, Arg, ArgMatches};
 use config::{Config as ConfigCache, ConfigError};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 const REGISTRY_URL: &str = "registry-url";
 const ENV_REGISTRY_URL: &str = "SOGAR_REGISTRY_URL";
@@ -122,45 +122,43 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
 pub fn get_mime_type_from_file_extension(file_name: String) -> String {
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
 
-    let mut mime_mapping = HashMap::with_capacity(32);
-    mime_mapping.insert(".zip", "application/zip");
-    mime_mapping.insert(".bz", "application/x-bzip");
-    mime_mapping.insert(".bz2", "application/x-bzip2");
-    mime_mapping.insert(".tar", "application/x-tar");
-    mime_mapping.insert(".7z", "application/x-7z-compressed");
-    mime_mapping.insert(".pdf", "application/pdf");
-    mime_mapping.insert(".json", "application/json");
-    mime_mapping.insert(".js", "text/javascript");
-    mime_mapping.insert(".htm", "text/html");
-    mime_mapping.insert(".html", "text/html");
-    mime_mapping.insert(".rtf", "application/rtf");
-    mime_mapping.insert(".txt", "text/plain");
-    mime_mapping.insert(".bmp", "image/bmp");
-    mime_mapping.insert(".gif", "image/gif");
-    mime_mapping.insert(".ico", "image/x-icon");
-    mime_mapping.insert(".jpeg", "image/jpeg");
-    mime_mapping.insert(".jpg", "image/jpeg");
-    mime_mapping.insert(".png", "image/png");
-    mime_mapping.insert(".svg", "image/svg+xml");
-    mime_mapping.insert(".tif", "image/tiff");
-    mime_mapping.insert(".tiff", "image/tiff");
-    mime_mapping.insert(".webp", "image/webp");
-    mime_mapping.insert(".mp4", "video/mp4");
-    mime_mapping.insert(".mkv", "video/x-matroska");
-    mime_mapping.insert(".mov", "video/quicktime");
-    mime_mapping.insert(".avi", "video/x-msvideo");
-    mime_mapping.insert(".wmv", "video/x-ms-wmv");
-    mime_mapping.insert(".3gp", "video/3gpp");
-    mime_mapping.insert(".flv", "video/x-flv");
-    mime_mapping.insert(".webm", "video/webm");
-    mime_mapping.insert(".mp3", "audio/mpeg");
-    mime_mapping.insert(".wav", "audio/wav");
-    mime_mapping.insert(".weba", "audio/webm");
-
     if let Some(extension) = Path::new(file_name.as_str()).extension() {
-        if let Some(res) = mime_mapping.remove(format!(".{}", extension.to_str().unwrap()).as_str()) {
-            return res.to_string();
-        }
+        return match format!(".{}", extension.to_str().unwrap()).as_str() {
+            ".zip" => "application/zip".to_string(),
+            ".bz" => "application/x-bzip".to_string(),
+            ".bz2" => "application/x-bzip2".to_string(),
+            ".tar" => "application/x-tar".to_string(),
+            ".7z" => "application/x-7z-compressed".to_string(),
+            ".pdf" => "application/pdf".to_string(),
+            ".json" => "application/json".to_string(),
+            ".js" => "text/javascript".to_string(),
+            ".htm" => "text/html".to_string(),
+            ".html" => "text/html".to_string(),
+            ".rtf" => "application/rtf".to_string(),
+            ".txt" => "text/plain".to_string(),
+            ".bmp" => "image/bmp".to_string(),
+            ".gif" => "image/gif".to_string(),
+            ".ico" => "image/x-icon".to_string(),
+            ".jpeg" => "image/jpeg".to_string(),
+            ".jpg" => "image/jpeg".to_string(),
+            ".png" => "image/png".to_string(),
+            ".svg" => "image/svg+xml".to_string(),
+            ".tif" => "image/tiff".to_string(),
+            ".tiff" => "image/tiff".to_string(),
+            ".webp" => "image/webp".to_string(),
+            ".mp4" => "video/mp4".to_string(),
+            ".mkv" => "video/x-matroska".to_string(),
+            ".mov" => "video/quicktime".to_string(),
+            ".avi" => "video/x-msvideo".to_string(),
+            ".wmv" => "video/x-ms-wmv".to_string(),
+            ".3gp" => "video/3gpp".to_string(),
+            ".flv" => "video/x-flv".to_string(),
+            ".webm" => "video/webm".to_string(),
+            ".mp3" => "audio/mpeg".to_string(),
+            ".wav" => "audio/wav".to_string(),
+            ".weba" => "audio/webm".to_string(),
+            _ => "application/octet-stream".to_string(),
+        };
     };
 
     String::from("application/octet-stream")

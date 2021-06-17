@@ -1,0 +1,14 @@
+[package]
+name = "sogar-cli"
+version = "0.1.0"
+authors = ["Anastasiia Romaniuk <romaniuk.anastasiia@apriorit.com>"]
+edition = "2018"
+
+[dependencies]
+tokio = { version = "1.4.0", features = ["rt", "rt-multi-thread", "macros"]}
+sogar-core = { version = "0.1.0", path = "../sogar-core" }
+config = { version = "0.10", default-features = false, features = ["yaml"] }
+
+slog-scope-futures = "0.1.1"
+
+saphir = { version = "2.8", features = ["full"] }

@@ -1,0 +1,37 @@
+[package]
+name = "sogar-core"
+version = "0.1.0"
+authors = ["Anastasiia Romaniuk <romaniuk.anastasiia@apriorit.com>"]
+edition = "2018"
+
+[dependencies]
+reqwest = { version = "0.11.2", features = ["json", "stream"]}
+clap = "2.31"
+config = { version = "0.10", default-features = false, features = ["yaml"] }
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+serde_yaml = "0.8"
+sha2 = "0.8"
+url = "1.7.1"
+regex = "0.2"
+tokio = { version = "1.4.0", features = ["rt", "rt-multi-thread", "macros", "fs"]}
+tempfile = "3.0"
+thiserror = "1.0.23"
+futures = "0.3"
+tokio-util = { version = "0.6", features = ["codec"] }
+saphir = { version = "2.8", features = ["full"] }
+hyper = { version = "0.13" }
+#for saphir
+tokio_02 = {version = "0.2", package = "tokio", features = ["rt-core", "fs"]}
+
+# location of special directories
+dirs-next = "2"
+
+# logging
+slog =  "2.5"
+slog-term = "2.4"
+slog-async = "2.3"
+slog-scope = "4.3"
+slog-envlogger = "2.2"
+slog-scope-futures = "0.1.1"
+slog-stdlog = "4.0"

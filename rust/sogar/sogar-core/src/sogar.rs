@@ -111,7 +111,8 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
             export_sogar_blob(&settings, access_token.clone(), reference.clone(), push_data).await?;
         }
 
-        let config_data = create_config()?;
+        let config_file = NamedTempFile::new()?;
+        let config_data = create_config(config_file.path())?;
 
         let manifest_file = NamedTempFile::new()?;
         let manifest = Manifest {
@@ -217,10 +218,9 @@ async fn create_sogar_cache(path: Option<String>) -> SogarResult<SogarCache> {
     Ok(cache)
 }
 
-pub fn create_config() -> io::Result<FileInfo> {
-    let config_file = NamedTempFile::new()?;
+pub fn create_config(file_path: &Path) -> io::Result<FileInfo> {
     read_file_data(
-        config_file.path(),
+        file_path,
         String::from("application/vnd.oci.image.config.v1+json"),
         None,
     )

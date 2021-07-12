@@ -88,7 +88,7 @@ impl SogarController {
         if !content.exists() {
             match File::create(path.join(ARTIFACTS_CONTENT)) {
                 Ok(mut file) => {
-                    if let Err(e) = writeln!(file, "blobs:") {
+                    if let Err(e) = writeln!(file, "artifacts:") {
                         error!("Couldn't write to file: {}", e);
                     }
                 }
@@ -432,26 +432,30 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
     use std::fs::File;
 
     let content_path = image_path.join(ARTIFACTS_CONTENT);
-    let file = File::open(content_path);
+    match File::open(&content_path) {
+        Ok(file) => {
 
-    #[derive(Deserialize)]
-    struct ArtifactsData {
-        artifacts: HashMap<String, String>,
-    }
+            #[derive(Deserialize)]
+            struct ArtifactsData {
+                artifacts: HashMap<String, String>,
+            }
 
-    if let Ok(file) = file {
-        let yaml = serde_yaml::from_reader(file);
-        if let Err(e) = yaml {
-            error!("Failed to convert manifest data to json with error: {}", e);
-            return None;
+            let yaml = serde_yaml::from_reader(file);
+            if let Err(e) = yaml {
+                error!("Failed to convert manifest data to yaml with error: {}", e);
+                return None;
+            }
+
+            let blobs_data: ArtifactsData = yaml.unwrap();
+            if blobs_data.artifacts.contains_key(digest_value.as_str()) {
+                return blobs_data
+                    .artifacts
+                    .get(digest_value.as_str())
+                    .map(|mime_type| mime_type.to_string());
+            }
         }
-
-        let blobs_data: ArtifactsData = yaml.unwrap();
-        if blobs_data.artifacts.contains_key(digest_value.as_str()) {
-            return blobs_data
-                .artifacts
-                .get(digest_value.as_str())
-                .map(|mime_type| mime_type.to_string());
+        Err(e) => {
+            error!("Content file ({}) can't be opened: {}", content_path.display(), e);
         }
     }
 

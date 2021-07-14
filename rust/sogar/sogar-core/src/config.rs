@@ -96,7 +96,7 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
             None => {
                 config_cache.set(
                     format!("{}.{}", COMMAND_DATA, MEDIA_TYPE).as_str(),
-                    get_mime_type_from_file_extension(filepath.to_string()),
+                    get_mime_type_from_file_extension(filepath),
                 )?;
             }
         }
@@ -119,10 +119,10 @@ pub fn match_arguments(matches: &ArgMatches, config_cache: &mut ConfigCache) -> 
     Ok(())
 }
 
-pub fn get_mime_type_from_file_extension(file_name: String) -> String {
+pub fn get_mime_type_from_file_extension(file_name: &str) -> String {
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
 
-    if let Some(extension) = Path::new(file_name.as_str()).extension() {
+    if let Some(extension) = Path::new(file_name).extension() {
         return match format!(".{}", extension.to_str().unwrap()).as_str() {
             ".zip" => "application/zip".to_string(),
             ".bz" => "application/x-bzip".to_string(),

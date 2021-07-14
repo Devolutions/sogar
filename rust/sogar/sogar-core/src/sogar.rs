@@ -310,7 +310,7 @@ async fn get_access_token(settings: &Settings) -> SogarResult<String> {
             reference.repository, reference.name, reference.repository, reference.name
         );
 
-        let service = Url::parse(settings.registry_url.clone().as_str())?
+        let service = Url::parse(settings.registry_url.as_str())?
             .host_str()
             .unwrap()
             .to_string();

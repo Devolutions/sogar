@@ -1602,7 +1602,7 @@ dependencies = [
 
 [[package]]
 name = "sogar-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "config",
  "saphir",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "sogar-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "config",

@@ -262,14 +262,14 @@ mod tests {
 
     #[test]
     fn test_map_contains_value() {
-        let res = get_mime_type_from_file_extension(String::from("test.json"));
+        let res = get_mime_type_from_file_extension("test.json");
 
         assert_eq!(String::from("application/json"), res);
     }
 
     #[test]
     fn test_map_not_contains_value() {
-        let res = get_mime_type_from_file_extension(String::from("test.pcap"));
+        let res = get_mime_type_from_file_extension("test.pcap");
 
         assert_eq!(String::from("application/octet-stream"), res);
     }

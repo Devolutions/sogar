@@ -117,7 +117,7 @@ impl SogarController {
         if let (Some(repository), Some(image_name), Some(digest)) =
             (map.get(REPOSITORY), map.get(IMAGE_NAME), map.get(DIGEST))
         {
-            if let Some(digest) = parse_digest(digest.to_string()) {
+            if let Some(digest) = parse_digest(digest) {
                 let path = Path::new(repository)
                     .join(image_name)
                     .join(ARTIFACTS_DIR)
@@ -168,7 +168,7 @@ impl SogarController {
         if let (Some(repository), Some(image_name), Some(digest)) = (map.get(REPOSITORY), map.get(IMAGE_NAME), digest) {
             let path = Path::new(repository).join(image_name).join(ARTIFACTS_DIR);
             if path.exists() {
-                if let Some(blob_digest) = parse_digest(digest.clone()) {
+                if let Some(blob_digest) = parse_digest(&digest) {
                     let path = path.join(blob_digest.digest_type.as_str());
                     if !path.exists() {
                         if let Err(e) = create_dir_all(path.as_path()) {
@@ -252,7 +252,7 @@ impl SogarController {
                         .and_then(|header| header.to_str().map_or(None, |result| Some(result.to_string())));
                 }
 
-                add_artifacts_info(tag.clone(), manifest_mime_type, image_path.as_path());
+                add_artifacts_info(tag, manifest_mime_type, image_path.as_path());
 
                 let mut response = SogarCustomResponse::new(StatusCode::CREATED);
                 response.header(
@@ -278,7 +278,7 @@ impl SogarController {
         {
             let image_path = Path::new(repository).join(image_name);
             let path = image_path.join(ARTIFACTS_DIR).join(tag);
-            let content_type = read_artifact_info(tag.to_string(), image_path.as_path());
+            let content_type = read_artifact_info(tag, image_path.as_path());
 
             if headers.contains_key(ACCEPT_HEADER) {
                 if let (Some(accept_value), Some(content_type)) = (
@@ -306,7 +306,7 @@ impl SogarController {
         if let (Some(repository), Some(image_name), Some(digest)) =
             (map.get(REPOSITORY), map.get(IMAGE_NAME), map.get(DIGEST))
         {
-            if let Some(digest) = parse_digest(digest.to_string()) {
+            if let Some(digest) = parse_digest(digest) {
                 let image_path = Path::new(repository).join(image_name);
                 let path = image_path
                     .join(ARTIFACTS_DIR)
@@ -315,7 +315,7 @@ impl SogarController {
                 let (status_code, file_result) = get_file_if_exists(path.as_path()).await;
 
                 if let Some(file) = file_result {
-                    let content_type = read_artifact_info(digest.value, image_path.as_path());
+                    let content_type = read_artifact_info(&digest.value, image_path.as_path());
 
                     let mut response = SogarCustomResponse::new(status_code);
                     response.file(file);
@@ -395,7 +395,7 @@ async fn get_file_if_exists(path: &Path) -> (StatusCode, Option<File>) {
     (StatusCode::NOT_FOUND, None)
 }
 
-pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image_path: &Path) {
+pub fn add_artifacts_info(filename: &str, manifest_mime: Option<String>, image_path: &Path) {
     use std::fs::{File, OpenOptions};
 
     let content_path = image_path.join(ARTIFACTS_CONTENT);
@@ -416,7 +416,7 @@ pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image
 
         if let Ok(mut file) = artifacts_content_file {
             for layer in manifest.layers {
-                if let Some(digest) = parse_digest(layer.digest.clone()) {
+                if let Some(digest) = parse_digest(&layer.digest) {
                     if let Err(e) = writeln!(file, "{}", format!("  {}: {}", digest.value, layer.media_type)) {
                         error!("Couldn't write to file: {}", e);
                     }
@@ -432,7 +432,7 @@ pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image
     }
 }
 
-fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String> {
+fn read_artifact_info(digest_value: &str, image_path: &Path) -> Option<String> {
     use std::fs::File;
 
     let content_path = image_path.join(ARTIFACTS_CONTENT);
@@ -450,10 +450,10 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
             }
 
             let blobs_data: ArtifactsData = yaml.unwrap();
-            if blobs_data.artifacts.contains_key(digest_value.as_str()) {
+            if blobs_data.artifacts.contains_key(digest_value) {
                 return blobs_data
                     .artifacts
-                    .get(digest_value.as_str())
+                    .get(digest_value)
                     .map(|mime_type| mime_type.to_string());
             }
         }

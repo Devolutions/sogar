@@ -95,16 +95,16 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
     let export = settings.command_data.clone();
 
     let access_token = get_access_token(&settings).await?;
-    if let Some(reference) = parse_namespace(export.reference.clone()) {
+    if let Some(reference) = parse_namespace(&export.reference) {
         let mut layers = Vec::new();
         for filepath in &export.filepath {
             let push_file_path = Path::new(filepath.as_str());
 
             let annotations_map = create_annotation_for_filename(push_file_path);
 
-            let push_data = read_file_data(push_file_path, export.media_type.clone(), Some(annotations_map))?;
+            let push_data = read_file_data(push_file_path, &export.media_type, Some(annotations_map))?;
             layers.push(push_data.layer.clone());
-            export_sogar_blob(&settings, access_token.clone(), reference.clone(), push_data).await?;
+            export_sogar_blob(&settings, &access_token, reference.clone(), push_data).await?;
         }
 
         let config_file = NamedTempFile::new()?;
@@ -119,9 +119,9 @@ pub async fn export_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
 
         let manifest_file_info = create_file_info(manifest, manifest_file.path())?;
 
-        export_sogar_blob(&settings, access_token.clone(), reference.clone(), config_data).await?;
+        export_sogar_blob(&settings, &access_token, reference.clone(), config_data).await?;
 
-        export_sogar_manifest(&settings, access_token, reference, manifest_file_info).await?;
+        export_sogar_manifest(&settings, &access_token, reference, manifest_file_info).await?;
     }
 
     Ok(())
@@ -134,7 +134,7 @@ pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
 
     let sogar_cache = create_sogar_cache(settings.registry_cache.clone()).await?;
 
-    if let Some(reference) = parse_namespace(import.reference.clone()) {
+    if let Some(reference) = parse_namespace(&import.reference) {
         let manifest = get_sogar_manifest(&settings, access_token.clone(), reference.clone(), &sogar_cache).await?;
         let out_file_path = import.filepath.clone();
         if out_file_path.is_empty() {
@@ -143,7 +143,7 @@ pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
 
         save_sogar_blob(
             &settings,
-            access_token.clone(),
+            &access_token,
             reference.clone(),
             manifest.config.clone(),
             &sogar_cache,
@@ -152,14 +152,8 @@ pub async fn import_sogar_file_artifact(settings: &Settings) -> SogarResult<()> 
 
         let mut blob_path = PathBuf::new();
         for (count, blob) in manifest.layers.iter().enumerate() {
-            let from_path = save_sogar_blob(
-                &settings,
-                access_token.clone(),
-                reference.clone(),
-                blob.clone(),
-                &sogar_cache,
-            )
-            .await?;
+            let from_path =
+                save_sogar_blob(&settings, &access_token, reference.clone(), blob.clone(), &sogar_cache).await?;
 
             if count < out_file_path.len() {
                 blob_path = PathBuf::from(out_file_path.get(count).unwrap_or(&"".to_string()));
@@ -215,15 +209,11 @@ async fn create_sogar_cache(path: Option<String>) -> SogarResult<SogarCache> {
 }
 
 pub fn create_config(file_path: &Path) -> io::Result<FileInfo> {
-    read_file_data(
-        file_path,
-        String::from("application/vnd.oci.image.config.v1+json"),
-        None,
-    )
+    read_file_data(file_path, "application/vnd.oci.image.config.v1+json", None)
 }
 
 fn create_file_name_from_layer(layer: &Layer, path: &Path) -> PathBuf {
-    let digest_part_option = parse_digest(layer.digest.clone());
+    let digest_part_option = parse_digest(&layer.digest);
     let name = match &layer.annotations {
         Some(annotations) if !annotations.is_empty() && annotations.contains_key(IMAGE_TITLE) => {
             annotations.get(IMAGE_TITLE).unwrap_or(&"".to_string()).to_string()
@@ -272,7 +262,7 @@ pub fn create_file_info(manifest: Manifest, file_path: &Path) -> io::Result<File
 
 pub fn read_file_data(
     file_path: &Path,
-    media_type: String,
+    media_type: impl Into<String>,
     annotations: Option<HashMap<String, String>>,
 ) -> io::Result<FileInfo> {
     use std::fs::File;
@@ -288,7 +278,7 @@ pub fn read_file_data(
     let artifact_digest = format!("{}:{}", artifact_digest_hash_type, artifact_digest_value);
 
     let layer = Layer {
-        media_type,
+        media_type: media_type.into(),
         digest: artifact_digest,
         size: file_size,
         annotations,
@@ -300,7 +290,7 @@ pub fn read_file_data(
 }
 
 async fn get_access_token(settings: &Settings) -> SogarResult<String> {
-    if let Some(reference) = parse_namespace(settings.command_data.reference.clone()) {
+    if let Some(reference) = parse_namespace(&settings.command_data.reference) {
         let scope = format!(
             "repository:{}/{}:pull repository:{}/{}:pull,push",
             reference.repository, reference.name, reference.repository, reference.name
@@ -342,7 +332,7 @@ async fn get_access_token(settings: &Settings) -> SogarResult<String> {
 
 async fn export_sogar_blob(
     settings: &Settings,
-    access_token: String,
+    access_token: &str,
     reference: Reference,
     file_info: FileInfo,
 ) -> SogarResult<()> {
@@ -358,7 +348,7 @@ async fn export_sogar_blob(
 
     let head_response = client
         .head(head_url.as_str())
-        .bearer_auth(access_token.clone())
+        .bearer_auth(access_token)
         .header(ACCEPT, file_info.layer.media_type.clone())
         .send()
         .await?;
@@ -432,13 +422,13 @@ fn file_to_body(file: File) -> Body {
 
 async fn save_sogar_blob(
     settings: &Settings,
-    access_token: String,
+    access_token: &str,
     reference: Reference,
     layer: Layer,
     sogar_cache: &SogarCache,
 ) -> SogarResult<PathBuf> {
     let client = Client::new();
-    let blob_digest = parse_digest(layer.digest.clone());
+    let blob_digest = parse_digest(&layer.digest);
     if blob_digest.is_none() {
         return Err(str_to_sogar_error(
             format!("Failed to parse digest {:?}", blob_digest).as_str(),
@@ -470,7 +460,7 @@ async fn save_sogar_blob(
 
     let get_response = client
         .get(get_url.as_str())
-        .bearer_auth(access_token.clone())
+        .bearer_auth(access_token)
         .header(ACCEPT, accept_list)
         .send()
         .await?;
@@ -487,7 +477,7 @@ async fn save_sogar_blob(
 
 async fn export_sogar_manifest(
     settings: &Settings,
-    access_token: String,
+    access_token: &str,
     reference: Reference,
     file_info: FileInfo,
 ) -> SogarResult<()> {
@@ -614,13 +604,13 @@ fn str_to_sogar_error(error: &str) -> SogarError {
     SogarError::IoError(Error::new(ErrorKind::InvalidData, error))
 }
 
-fn parse_namespace(reference: String) -> Option<Reference> {
+fn parse_namespace(reference: &str) -> Option<Reference> {
     let reference_tag = Regex::new(r"(.*)/(.*):(.*)").unwrap();
     let reference_no_tag = Regex::new(r"(.*)/(.*)").unwrap();
 
-    let split_value = if reference_tag.is_match(reference.as_str()) {
+    let split_value = if reference_tag.is_match(reference) {
         Some(vec!['/', ':'])
-    } else if reference_no_tag.is_match(reference.as_str()) {
+    } else if reference_no_tag.is_match(reference) {
         Some(vec!['/'])
     } else {
         None
@@ -651,7 +641,7 @@ fn parse_namespace(reference: String) -> Option<Reference> {
     None
 }
 
-pub fn parse_digest(blobs_digest: String) -> Option<BlobDigest> {
+pub fn parse_digest(blobs_digest: &str) -> Option<BlobDigest> {
     let digest_type = 0;
     let value = 1;
     let max_items_size = 2;
@@ -688,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_reference_with_tag() {
-        let reference = parse_namespace(String::from("videos/demo:latest"));
+        let reference = parse_namespace("videos/demo:latest");
         assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
@@ -699,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_reference_no_tag() {
-        let reference = parse_namespace(String::from("videos/demo"));
+        let reference = parse_namespace("videos/demo");
         assert_eq!(reference.is_some(), true);
         let reference = reference.unwrap();
         assert_eq!(reference.repository, String::from("videos"));
@@ -709,15 +699,13 @@ mod tests {
 
     #[test]
     fn test_incorrect_reference() {
-        let reference = parse_namespace(String::from("videos"));
+        let reference = parse_namespace("videos");
         assert_eq!(reference.is_none(), true);
     }
 
     #[test]
     fn test_correct_digest() {
-        let blob_digest = parse_digest(String::from(
-            "sha256:0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8",
-        ));
+        let blob_digest = parse_digest("sha256:0c01ac7e3eeaa94647da076b1c2ddbbab56831c55bea4abe47cf35ab2ced5da8");
         assert_eq!(blob_digest.is_some(), true);
         let blob_digest = blob_digest.unwrap();
         assert_eq!(blob_digest.digest_type, String::from("sha256"));
@@ -729,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_incorrect_digest() {
-        let blob_digest = parse_digest(String::from("sha256"));
+        let blob_digest = parse_digest("sha256");
         assert_eq!(blob_digest.is_none(), true);
     }
 

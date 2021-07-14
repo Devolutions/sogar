@@ -1,16 +1,11 @@
-use std::{
-    collections::HashMap,
-    fs, io,
-    io::{Error, ErrorKind, Write},
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::io::{Error, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use regex::Regex;
-use reqwest::{
-    header::ToStrError,
-    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
-    Body, Client, Response,
-};
+use reqwest::header::{ToStrError, ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION};
+use reqwest::{Body, Client, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -20,7 +15,8 @@ use crate::config::Settings;
 use futures::StreamExt;
 use slog_scope::{debug, error, info};
 use tempfile::NamedTempFile;
-use tokio::{fs::File, io::AsyncWriteExt};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

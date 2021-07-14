@@ -1,10 +1,15 @@
 use crate::{parse_digest, Manifest};
 use hyper::body::HttpBody;
 use regex::Regex;
-use saphir::{hyper::body::Buf, prelude::*};
+use saphir::hyper::body::Buf;
+use saphir::prelude::*;
 use serde::Deserialize;
 use slog_scope::{debug, error};
-use std::{collections::HashMap, fs::create_dir_all, io, io::Write, path::Path};
+use std::collections::HashMap;
+use std::fs::create_dir_all;
+use std::io;
+use std::io::Write;
+use std::path::Path;
 use tokio_02::io::AsyncWriteExt;
 
 const REPOSITORY: &str = "repository";
@@ -391,8 +396,7 @@ async fn get_file_if_exists(path: &Path) -> (StatusCode, Option<File>) {
 }
 
 pub fn add_artifacts_info(filename: String, manifest_mime: Option<String>, image_path: &Path) {
-    use std::fs::File;
-    use std::fs::OpenOptions;
+    use std::fs::{File, OpenOptions};
 
     let content_path = image_path.join(ARTIFACTS_CONTENT);
     let filepath = image_path.join(ARTIFACTS_DIR).join(&filename);
@@ -434,7 +438,6 @@ fn read_artifact_info(digest_value: String, image_path: &Path) -> Option<String>
     let content_path = image_path.join(ARTIFACTS_CONTENT);
     match File::open(&content_path) {
         Ok(file) => {
-
             #[derive(Deserialize)]
             struct ArtifactsData {
                 artifacts: HashMap<String, String>,

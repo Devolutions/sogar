@@ -1,12 +1,8 @@
-use slog::Drain;
-use slog::FnValue;
-use slog::{o, FilterLevel, Fuse, Logger};
+use slog::{o, Drain, FilterLevel, FnValue, Fuse, Logger};
 use slog_async::{Async, OverflowStrategy};
 use slog_envlogger::LogBuilder;
 use slog_scope::set_global_logger;
-use slog_term::FullFormat;
-use slog_term::TermDecorator;
-use slog_term::{Decorator, PlainDecorator};
+use slog_term::{Decorator, FullFormat, PlainDecorator, TermDecorator};
 use std::env;
 use std::fs::OpenOptions;
 

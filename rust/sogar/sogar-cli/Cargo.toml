@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 tokio = { version = "1.4.0", features = ["rt", "rt-multi-thread", "macros"]}
-sogar-core = { version = "0.2.0", path = "../sogar-core" }
+sogar-core = { version = "0.3.0", path = "../sogar-core" }
 config = { version = "0.10", default-features = false, features = ["yaml"] }
 
 slog-scope-futures = "0.1.1"

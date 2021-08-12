@@ -1,7 +1,6 @@
 use crate::{parse_digest, Manifest};
 use hyper::body::HttpBody;
 use regex::Regex;
-use saphir::hyper::body::Buf;
 use saphir::prelude::*;
 use serde::Deserialize;
 use slog_scope::{debug, error};
@@ -10,7 +9,7 @@ use std::fs::create_dir_all;
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use tokio_02::io::AsyncWriteExt;
+use tokio::io::AsyncWriteExt;
 
 const REPOSITORY: &str = "repository";
 const IMAGE_NAME: &str = "image_name";
@@ -334,7 +333,7 @@ impl SogarController {
 }
 
 async fn write_body_to_file(mut body: hyper::Body, path: &Path) -> io::Result<()> {
-    use tokio_02::fs::File;
+    use tokio::fs::File;
 
     let mut file = File::create(path).await?;
 
@@ -342,7 +341,7 @@ async fn write_body_to_file(mut body: hyper::Body, path: &Path) -> io::Result<()
         match chunk_res {
             Ok(chunk) => {
                 debug!("Got a chunk [len = {}]", chunk.len());
-                file.write_all(chunk.bytes()).await?
+                file.write_all(&*chunk).await?
             }
 
             Err(e) => {

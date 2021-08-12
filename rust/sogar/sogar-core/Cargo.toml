@@ -1,6 +1,6 @@
 [package]
 name = "sogar-core"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Anastasiia Romaniuk <romaniuk.anastasiia@apriorit.com>"]
 edition = "2018"
 description = "Simple OCI Generic Artifact Registry (SOGAR)"
@@ -22,10 +22,9 @@ tempfile = "3.0"
 thiserror = "1.0.23"
 futures = "0.3"
 tokio-util = { version = "0.6", features = ["codec"] }
-saphir = { version = "2.8", features = ["full"] }
-hyper = { version = "0.13" }
-#for saphir
-tokio_02 = {version = "0.2", package = "tokio", features = ["rt-core", "fs"]}
+# FIXME: update once next saphir version is published
+saphir = { version = "2.8", features = ["full"], git = "https://github.com/CBenoit/saphir", branch = "hyper-update" }
+hyper = { version = "0.14" }
 
 # location of special directories
 dirs-next = "2"
